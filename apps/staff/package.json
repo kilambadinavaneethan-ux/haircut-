@@ -1,0 +1,27 @@
+{
+  "name": "@quickcut/staff",
+  "version": "1.0.0",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "start": "expo start --port 8082 --lan",
+    "start:lan": "expo start --port 8082 --lan",
+    "start:tunnel": "expo start --port 8082 --tunnel",
+    "android": "expo start --port 8082 --android",
+    "ios": "expo start --port 8082 --ios",
+    "web": "expo start --port 8082 --web"
+  },
+  "dependencies": {
+    "@quickcut/shared": "*",
+    "expo": "~51.0.0",
+    "expo-camera": "~15.0.16",
+    "expo-status-bar": "~1.12.1",
+    "react": "18.2.0",
+    "react-native": "^0.74.5"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.20.0",
+    "@types/react": "~18.2.45",
+    "typescript": "~5.3.3"
+  }
+}
