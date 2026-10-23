@@ -41,14 +41,23 @@ export default function AccountManagement({
     setLoading(true);
 
     try {
-      const { error } = await (supabase.from('profiles') as any)
-        .update({
-          role: selectedRole,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', editingProfile.id);
+      // 1. Execute secure admin role RPC
+      const { data: rpcData, error: rpcError } = await (supabase.rpc as any)('admin_set_user_role', {
+        p_user_id: editingProfile.id,
+        p_new_role: selectedRole
+      });
 
-      if (error) throw error;
+      if (rpcError) {
+        // Fallback update
+        const { error } = await (supabase.from('profiles') as any)
+          .update({
+            role: selectedRole,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', editingProfile.id);
+
+        if (error) throw error;
+      }
 
       await logAdminAction(adminId, 'PROFILE_ROLE_UPDATED', 'profiles', editingProfile.id, {
         user_name: editingProfile.full_name,

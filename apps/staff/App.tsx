@@ -235,29 +235,50 @@ export default function StaffApp() {
 
     const performComplete = async () => {
       try {
-        const completionTime = new Date().toISOString();
-        const { error } = await (supabase.from('queue_entries') as any)
-          .update({
-            status: 'completed',
-            completed_at: completionTime
-          })
-          .eq('id', entry.id);
+        // 1. Execute authoritative server-side completion RPC
+        let isBillable = false;
+        let feeInr = 0.0;
 
-        if (error) throw error;
+        const { data: rpcData, error: rpcError } = await (supabase.rpc as any)('complete_service_atomic', {
+          p_entry_id: entry.id
+        });
 
-        const willBeBillable = isOnlineCustomer && isCheckedIn;
+        if (!rpcError && rpcData) {
+          isBillable = !!rpcData.is_billable;
+          feeInr = typeof rpcData.platform_fee_inr === 'number' ? rpcData.platform_fee_inr : (isBillable ? 5.0 : 0.0);
+        } else {
+          // Fallback direct update
+          const completionTime = new Date().toISOString();
+          const { error } = await (supabase.from('queue_entries') as any)
+            .update({
+              status: 'completed',
+              completed_at: completionTime
+            })
+            .eq('id', entry.id);
+
+          if (error) throw error;
+          // Re-fetch entry to read authoritative is_billable calculated by database trigger
+          const { data: updatedEntry } = await (supabase.from('queue_entries') as any)
+            .select('is_billable')
+            .eq('id', entry.id)
+            .single();
+
+          isBillable = !!updatedEntry?.is_billable;
+          feeInr = isBillable ? 5.0 : 0.0;
+        }
+
         await logAudit('SERVICE_COMPLETED', entry.id, {
           queue_number: entry.queue_number,
           is_walkin: entry.is_walkin,
           has_checked_in: isCheckedIn,
-          is_billable: willBeBillable,
-          platform_fee_inr: willBeBillable ? 5.0 : 0.0
+          is_billable: isBillable,
+          platform_fee_inr: feeInr
         });
 
         Alert.alert(
           'Service Completed',
           `Ticket #${entry.queue_number} completed.\n\nPlatform Fee: ${
-            willBeBillable ? '₹5.00 (Billable completion)' : '₹0.00 (Exempt: Walk-in or no QR check-in)'
+            isBillable ? `₹${feeInr.toFixed(2)} (Billable completion)` : '₹0.00 (Exempt: Walk-in or no QR check-in)'
           }`
         );
 

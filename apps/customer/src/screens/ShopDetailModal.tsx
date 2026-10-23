@@ -129,32 +129,52 @@ export function ShopDetailModal({
     setErrorMsg(null);
 
     try {
-      // Create queue entry in Supabase
-      const { data, error } = await supabase
-        .from('queue_entries')
-        .insert({
-          shop_id: shop.id,
-          customer_id: customerId,
-          service_id: selectedServiceId,
-          status: 'waiting',
-          is_walkin: false
-        } as any)
-        .select('id, queue_number')
-        .single();
+      // 1. Try secure join_queue RPC first
+      let createdId: string;
+      let createdNumber: number;
 
-      if (error) throw error;
-      const created = data as unknown as { id: string; queue_number: number };
+      const { data: rpcData, error: rpcError } = await (supabase.rpc as any)('join_queue', {
+        p_shop_id: shop.id,
+        p_service_id: selectedServiceId
+      });
+
+      if (!rpcError && rpcData?.entry_id) {
+        createdId = rpcData.entry_id;
+        createdNumber = rpcData.queue_number;
+      } else {
+        // Fallback direct insert
+        const { data, error } = await supabase
+          .from('queue_entries')
+          .insert({
+            shop_id: shop.id,
+            customer_id: customerId,
+            service_id: selectedServiceId,
+            status: 'waiting',
+            is_walkin: false
+          } as any)
+          .select('id, queue_number')
+          .single();
+
+        if (error) throw error;
+        const created = data as unknown as { id: string; queue_number: number };
+        createdId = created.id;
+        createdNumber = created.queue_number;
+      }
 
       Alert.alert(
         'Queue Joined!',
-        `Your queue number is #${created.queue_number}. Head to the Live Queue tab to track your position.`
+        `Your queue number is #${createdNumber}. Head to the Live Queue tab to track your position.`
       );
-      onJoinedQueueSuccess(created.id);
+      onJoinedQueueSuccess(createdId);
       onClose();
     } catch (err: unknown) {
       let message = err instanceof Error ? err.message : 'Could not join queue';
-      if (message.includes('uq_active_customer_queue') || message.includes('duplicate')) {
-        message = 'You already have an active queue ticket in progress.';
+      if (
+        message.includes('uq_active_customer_queue') ||
+        message.includes('already holds an active') ||
+        message.includes('duplicate')
+      ) {
+        message = 'You already have an active queue ticket in progress across the platform.';
       }
       setErrorMsg(message);
       Alert.alert('Failed to Join Queue', message);
