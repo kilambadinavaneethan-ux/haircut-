@@ -85,7 +85,7 @@ export function QRScannerModal({
         <View style={styles.cameraWrapper}>
           {permission?.granted ? (
             <CameraView
-              style={StyleSheet.absoluteFillObject}
+              style={StyleSheet.absoluteFill}
               facing="back"
               barcodeScannerSettings={{
                 barcodeTypes: ['qr']
@@ -255,7 +255,7 @@ const styles = StyleSheet.create({
     fontSize: 14
   },
   verifyingOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(15, 23, 42, 0.85)',
     alignItems: 'center',
     justifyContent: 'center'

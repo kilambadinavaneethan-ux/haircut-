@@ -168,7 +168,7 @@ const styles = StyleSheet.create({
     marginBottom: 16
   },
   mapGridBackground: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     opacity: 0.15
   },
   gridLineHorizontal1: {
