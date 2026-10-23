@@ -3,7 +3,6 @@ import {
   StyleSheet,
   Text,
   View,
-  SafeAreaView,
   StatusBar,
   TouchableOpacity,
   ScrollView,
@@ -11,6 +10,7 @@ import {
   RefreshControl,
   Alert
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   Shop,
   Profile,
