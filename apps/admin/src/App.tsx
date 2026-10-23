@@ -377,28 +377,16 @@ export default function AdminApp() {
       const liveTickets = (ticketsRes.data as unknown as SupportTicket[]) || [];
       const liveLogs = (logsRes.data as unknown as AuditLog[]) || [];
 
-      // If database has live data, display it; if completely unpopulated, allow previewing demonstration data
-      if (liveShops.length === 0 && liveProfiles.length === 0 && liveQueue.length === 0) {
-        setIsDemoMode(true);
-        setShops(MOCK_SHOPS);
-        setProfiles(MOCK_PROFILES);
-        setServices(MOCK_SERVICES);
-        setQueueEntries(MOCK_QUEUE_ENTRIES);
-        setFeeRecords(MOCK_FEE_RECORDS);
-        setPayments(MOCK_PAYMENTS);
-        setTickets(MOCK_TICKETS);
-        setLogs(MOCK_AUDIT_LOGS);
-      } else {
-        setIsDemoMode(false);
-        setShops(liveShops);
-        setProfiles(liveProfiles);
-        setServices(liveServices);
-        setQueueEntries(liveQueue);
-        setFeeRecords(liveFees);
-        setPayments(livePayments);
-        setTickets(liveTickets);
-        setLogs(liveLogs);
-      }
+      // Always bind to authentic database records. Never silently substitute fake financial data.
+      setIsDemoMode(false);
+      setShops(liveShops);
+      setProfiles(liveProfiles);
+      setServices(liveServices);
+      setQueueEntries(liveQueue);
+      setFeeRecords(liveFees);
+      setPayments(livePayments);
+      setTickets(liveTickets);
+      setLogs(liveLogs);
     } catch (err) {
       console.warn('Supabase data load error:', err);
     }

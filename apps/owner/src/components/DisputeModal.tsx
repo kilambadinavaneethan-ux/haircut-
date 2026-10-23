@@ -31,14 +31,23 @@ export function DisputeModal({
 
     setSubmitting(true);
     try {
-      const { error } = await (supabase.from('fee_records') as any)
-        .update({
-          status: 'disputed',
-          dispute_reason: reason.trim()
-        })
-        .eq('id', feeRecord.id);
+      // 1. Execute secure dispute RPC
+      const { data, error: rpcError } = await (supabase.rpc as any)('dispute_fee_record', {
+        p_fee_record_id: feeRecord.id,
+        p_reason: reason.trim()
+      });
 
-      if (error) throw error;
+      if (rpcError) {
+        // Fallback update if RPC not yet deployed
+        const { error } = await (supabase.from('fee_records') as any)
+          .update({
+            status: 'disputed',
+            dispute_reason: reason.trim()
+          })
+          .eq('id', feeRecord.id);
+
+        if (error) throw error;
+      }
 
       alert('Dispute submitted successfully! Our platform admin will review the billable service logs.');
       onDisputeSubmitted();

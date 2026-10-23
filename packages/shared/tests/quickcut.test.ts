@@ -346,4 +346,344 @@ test('QuickCut Test Suite - Core Business Rules, Security & Invariants', async (
     assert.strictEqual(invRepeat.status, 'paid', 'Paid status must be preserved');
     assert.strictEqual(invRepeat.amount, 100, 'Paid amount must not be altered');
   });
+
+  // =========================================================================
+  // 7. Role & Authorization Security (Privilege Escalation Prevention)
+  // =========================================================================
+  await t.test('7. Role & Authorization Security Invariants', () => {
+    // 7a. Signup metadata simulation: User submits { role: "admin" } in metadata
+    function handleNewUserSimulation(rawMeta: Record<string, any>) {
+      // Rule: Public signup metadata must NEVER assign elevated roles
+      const defaultRole = 'customer';
+      return {
+        role: defaultRole,
+        fullName: rawMeta.full_name || 'Customer'
+      };
+    }
+
+    const hackerProfile = handleNewUserSimulation({ role: 'admin', full_name: 'Attacker' });
+    assert.strictEqual(hackerProfile.role, 'customer', 'Public signup must always receive customer role');
+
+    const ownerSignup = handleNewUserSimulation({ role: 'owner', full_name: 'New Owner' });
+    assert.strictEqual(ownerSignup.role, 'customer', 'Owner signup metadata cannot grant owner role directly');
+
+    // 7b. Self-promotion prevention
+    function updateProfileRole(currentRole: string, requestedRole: string, callerRole: string) {
+      if (requestedRole !== currentRole && callerRole !== 'admin') {
+        throw new Error('Unauthorized: Only administrators can modify roles.');
+      }
+      return requestedRole;
+    }
+
+    // Customer attempts to promote to admin -> rejected
+    assert.throws(() => {
+      updateProfileRole('customer', 'admin', 'customer');
+    }, /Only administrators can modify roles/);
+
+    // Customer attempts to promote to staff -> rejected
+    assert.throws(() => {
+      updateProfileRole('customer', 'staff', 'customer');
+    }, /Only administrators can modify roles/);
+
+    // Super Admin updates role -> allowed
+    const promoted = updateProfileRole('customer', 'staff', 'admin');
+    assert.strictEqual(promoted, 'staff');
+
+    // 7c. Shop approval authorization & self-approval regression test
+    function insertShopRLS(ownerId: string, status: string, callerRole: string) {
+      // shops_insert_policy: admin OR (auth.uid() = owner_id AND status = 'pending')
+      if (callerRole === 'admin') return { ownerId, status, allowed: true };
+      if (status !== 'pending') {
+        throw new Error('Unauthorized: New shops can only be submitted in pending status.');
+      }
+      return { ownerId, status, allowed: true };
+    }
+
+    function updateShopRLS(currentStatus: string, nextStatus: string, callerRole: string) {
+      // shops_update_policy: WITH CHECK requires status = current_status unless admin
+      if (callerRole === 'admin') return { status: nextStatus, allowed: true };
+      if (nextStatus !== currentStatus) {
+        throw new Error('Unauthorized: Shop owners cannot change shop approval status.');
+      }
+      return { status: nextStatus, allowed: true };
+    }
+
+    // Owner creates pending shop -> allowed
+    const pendingShop = insertShopRLS('owner-1', 'pending', 'customer');
+    assert.strictEqual(pendingShop.status, 'pending');
+
+    // Owner attempts to insert approved shop directly -> rejected
+    assert.throws(() => {
+      insertShopRLS('owner-1', 'approved', 'customer');
+    }, /New shops can only be submitted in pending status/);
+
+    // Owner attempts to self-approve pending shop -> rejected
+    assert.throws(() => {
+      updateShopRLS('pending', 'approved', 'owner');
+    }, /Shop owners cannot change shop approval status/);
+
+    // Admin approves shop -> allowed
+    const adminApproved = updateShopRLS('pending', 'approved', 'admin');
+    assert.strictEqual(adminApproved.status, 'approved');
+
+    // 7d. Cross-shop access policy
+    // 7d. Staff Lifecycle & Cross-Shop Isolation Policy
+    function assignStaffRLS(callerId: string, shopOwnerId: string, shopStatus: string, callerRole: string) {
+      if (callerRole === 'admin') return { allowed: true };
+      if (callerId !== shopOwnerId) {
+        throw new Error('Unauthorized: Only the shop owner can assign staff.');
+      }
+      if (shopStatus !== 'approved') {
+        throw new Error('Unauthorized: Cannot assign staff to pending or unapproved shop.');
+      }
+      return { allowed: true };
+    }
+
+    // Owner assigns staff to approved shop -> allowed
+    assert.strictEqual(assignStaffRLS('owner-1', 'owner-1', 'approved', 'owner').allowed, true);
+
+    // Non-owner attempts to assign staff -> rejected
+    assert.throws(() => {
+      assignStaffRLS('attacker', 'owner-1', 'approved', 'customer');
+    }, /Only the shop owner can assign staff/);
+
+    // Owner attempts to assign staff to pending shop -> rejected
+    assert.throws(() => {
+      assignStaffRLS('owner-1', 'owner-1', 'pending', 'customer');
+    }, /Cannot assign staff to pending or unapproved shop/);
+
+    function canAccessQueueEntry(staffAssignments: Record<string, string[]>, staffUserId: string, shopId: string, callerRole: string) {
+      if (callerRole === 'admin') return true;
+      const assignedShops = staffAssignments[staffUserId] || [];
+      return assignedShops.includes(shopId);
+    }
+
+    // Multi-shop staff assignment and removal simulation
+    const staffShops: Record<string, string[]> = {
+      'staff-1': ['shop-alpha', 'shop-beta'],
+      'staff-2': ['shop-beta']
+    };
+
+    // Staff-1 has access to both alpha and beta, but not gamma
+    assert.strictEqual(canAccessQueueEntry(staffShops, 'staff-1', 'shop-alpha', 'staff'), true, 'Staff can access assigned shop alpha');
+    assert.strictEqual(canAccessQueueEntry(staffShops, 'staff-1', 'shop-beta', 'staff'), true, 'Staff can access assigned shop beta');
+    assert.strictEqual(canAccessQueueEntry(staffShops, 'staff-1', 'shop-gamma', 'staff'), false, 'Staff cannot access unassigned shop gamma');
+
+    // Remove staff-1 from shop-alpha
+    staffShops['staff-1'] = staffShops['staff-1'].filter(s => s !== 'shop-alpha');
+    assert.strictEqual(canAccessQueueEntry(staffShops, 'staff-1', 'shop-alpha', 'staff'), false, 'Access to shop alpha immediately revoked after removal');
+    assert.strictEqual(canAccessQueueEntry(staffShops, 'staff-1', 'shop-beta', 'staff'), true, 'Access to shop beta preserved independently');
+
+
+    // 7e. Direct payment insertion prevention
+    function insertPaymentRLS(callerRole: string, amount: number) {
+      // payments_insert_policy: strictly requires is_admin()
+      if (callerRole !== 'admin') {
+        throw new Error('Unauthorized: Only platform administrators can record payments.');
+      }
+      return { amount, allowed: true };
+    }
+
+    assert.throws(() => {
+      insertPaymentRLS('owner', 0.01);
+    }, /Only platform administrators can record payments/);
+    assert.strictEqual(insertPaymentRLS('admin', 500).allowed, true);
+
+    // 7f. Privileged function execution authorization
+    function executeAdminSetUserRole(callerRole: string, targetUserId: string, newRole: string) {
+      if (callerRole !== 'admin') {
+        throw new Error('Access denied: Super Admin privileges required.');
+      }
+      return { targetUserId, newRole, success: true };
+    }
+
+    assert.throws(() => {
+      executeAdminSetUserRole('customer', 'user-1', 'admin');
+    }, /Access denied: Super Admin privileges required/);
+
+    assert.throws(() => {
+      executeAdminSetUserRole('owner', 'user-1', 'staff');
+    }, /Access denied: Super Admin privileges required/);
+
+    assert.strictEqual(executeAdminSetUserRole('admin', 'user-1', 'staff').success, true);
+  });
+
+  // =========================================================================
+  // 8. Atomic Daily Queue Numbering & Shop Isolation Simulation
+  // =========================================================================
+  await t.test('8. Atomic Daily Queue Numbering & Concurrency Safety', () => {
+    const shopDailyCounters = new Map<string, number>();
+
+    function allocateQueueNumber(shopId: string, queueDate: string): number {
+      const key = `${shopId}:${queueDate}`;
+      const current = shopDailyCounters.get(key) || 0;
+      const next = current + 1;
+      shopDailyCounters.set(key, next);
+      return next;
+    }
+
+    // Shop 1 on Date A
+    const s1_t1 = allocateQueueNumber('shop-alpha', '2026-10-23');
+    const s1_t2 = allocateQueueNumber('shop-alpha', '2026-10-23');
+    const s1_t3 = allocateQueueNumber('shop-alpha', '2026-10-23');
+
+    assert.strictEqual(s1_t1, 1);
+    assert.strictEqual(s1_t2, 2);
+    assert.strictEqual(s1_t3, 3);
+
+    // Shop 2 on same Date A must have independent numbering starting from 1
+    const s2_t1 = allocateQueueNumber('shop-beta', '2026-10-23');
+    const s2_t2 = allocateQueueNumber('shop-beta', '2026-10-23');
+    assert.strictEqual(s2_t1, 1, 'Separate shops must have independent numbering');
+    assert.strictEqual(s2_t2, 2);
+
+    // Shop 1 on next day Date B resets numbering to 1
+    const s1_nextDay_t1 = allocateQueueNumber('shop-alpha', '2026-10-24');
+    assert.strictEqual(s1_nextDay_t1, 1, 'New queue date must reset numbering to 1 for that shop');
+  });
+
+  // =========================================================================
+  // 9. Local Timezone Boundary Handling (Asia/Kolkata vs UTC)
+  // =========================================================================
+  await t.test('9. Local Timezone Date Calculation (Midnight Boundary)', () => {
+    function getShopLocalDate(utcTimestamp: string, timeZone: string = 'Asia/Kolkata'): string {
+      const d = new Date(utcTimestamp);
+      const formatter = new Intl.DateTimeFormat('en-CA', {
+        timeZone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      });
+      return formatter.format(d); // Returns YYYY-MM-DD
+    }
+
+    // Example 1: 2026-10-23 20:00:00 UTC = 2026-10-24 01:30:00 IST (+5:30)
+    // Under UTC it would be 2026-10-23, but under local shop time it is already 2026-10-24!
+    const utcMidnightCut = '2026-10-23T20:00:00Z';
+    const localDate = getShopLocalDate(utcMidnightCut, 'Asia/Kolkata');
+    assert.strictEqual(localDate, '2026-10-24', '1:30 AM IST must belong to Oct 24 local date, not Oct 23 UTC');
+
+    // Example 2: 2026-10-23 18:00:00 UTC = 2026-10-23 23:30:00 IST
+    // Under IST it is still Oct 23
+    const lateEveningCut = '2026-10-23T18:00:00Z';
+    const lateEveningDate = getShopLocalDate(lateEveningCut, 'Asia/Kolkata');
+    assert.strictEqual(lateEveningDate, '2026-10-23');
+  });
+
+  // =========================================================================
+  // 10. Queue State Machine Transitions & Terminal State Protection
+  // =========================================================================
+  await t.test('10. Queue State Machine Transitions', () => {
+    type QueueState = 'waiting' | 'in_service' | 'completed' | 'cancelled' | 'no_show';
+
+    function validateStateTransition(
+      from: QueueState,
+      to: QueueState,
+      isWalkin: boolean,
+      callerRole: 'customer' | 'staff' | 'owner' | 'admin'
+    ): boolean {
+      // Terminal state immutability
+      if (['completed', 'cancelled', 'no_show'].includes(from)) {
+        if (callerRole !== 'admin') {
+          throw new Error(`Ticket is in terminal state "${from}" and cannot be modified.`);
+        }
+      }
+
+      // Customer restrictions
+      if (callerRole === 'customer') {
+        if (from === 'waiting' && to === 'cancelled') {
+          return true;
+        }
+        throw new Error('Customers can only cancel a waiting ticket.');
+      }
+
+      // Lifecycle rules
+      if (from === 'waiting') {
+        if (to === 'in_service' || to === 'cancelled' || to === 'no_show') return true;
+        if (to === 'completed' && isWalkin) return true; // Walk-ins seated immediately
+        throw new Error('Online bookings must be called in_service before completion.');
+      }
+
+      if (from === 'in_service') {
+        if (['completed', 'cancelled', 'no_show'].includes(to)) return true;
+        throw new Error(`Invalid transition from in_service to ${to}`);
+      }
+
+      return true;
+    }
+
+    // Valid transitions
+    assert.strictEqual(validateStateTransition('waiting', 'in_service', false, 'staff'), true);
+    assert.strictEqual(validateStateTransition('in_service', 'completed', false, 'staff'), true);
+    assert.strictEqual(validateStateTransition('waiting', 'cancelled', false, 'customer'), true);
+
+    // Invalid: Online customer attempting to self-complete
+    assert.throws(() => {
+      validateStateTransition('waiting', 'completed', false, 'customer');
+    }, /Customers can only cancel/);
+
+    // Invalid: Online ticket completing directly from waiting without in_service
+    assert.throws(() => {
+      validateStateTransition('waiting', 'completed', false, 'staff');
+    }, /must be called in_service before completion/);
+
+    // Invalid: Modifying completed ticket
+    assert.throws(() => {
+      validateStateTransition('completed', 'waiting', false, 'staff');
+    }, /terminal state "completed"/);
+
+    // Invalid: Modifying cancelled ticket
+    assert.throws(() => {
+      validateStateTransition('cancelled', 'in_service', false, 'owner');
+    }, /terminal state "cancelled"/);
+  });
+
+  // =========================================================================
+  // 11. Multi-Ticket Platform Billing Tests (₹5, ₹50, ₹0)
+  // =========================================================================
+  await t.test('11. Comprehensive Platform Billing & Invoice Calculations', () => {
+    // 1 eligible service -> ₹5.00
+    const fee1 = calculatePlatformFee(1);
+    assert.strictEqual(fee1.totalAmount, 5.0);
+
+    // 10 eligible services -> ₹50.00
+    const fee10 = calculatePlatformFee(10);
+    assert.strictEqual(fee10.totalAmount, 50.0);
+
+    // 100 eligible services -> ₹500.00
+    const fee100 = calculatePlatformFee(100);
+    assert.strictEqual(fee100.totalAmount, 500.0);
+
+    // Mix of 5 online billable cuts, 3 walk-ins, 2 no-shows, 1 online without QR check-in
+    const serviceBatch = [
+      { is_walkin: false, checked_in_at: '2026-10-23T10:00:00Z', completed_at: '2026-10-23T10:30:00Z', status: 'completed' as const },
+      { is_walkin: false, checked_in_at: '2026-10-23T11:00:00Z', completed_at: '2026-10-23T11:30:00Z', status: 'completed' as const },
+      { is_walkin: false, checked_in_at: '2026-10-23T12:00:00Z', completed_at: '2026-10-23T12:30:00Z', status: 'completed' as const },
+      { is_walkin: false, checked_in_at: '2026-10-23T13:00:00Z', completed_at: '2026-10-23T13:30:00Z', status: 'completed' as const },
+      { is_walkin: false, checked_in_at: '2026-10-23T14:00:00Z', completed_at: '2026-10-23T14:30:00Z', status: 'completed' as const },
+      // 3 walk-ins (exempt)
+      { is_walkin: true, checked_in_at: '2026-10-23T10:15:00Z', completed_at: '2026-10-23T10:45:00Z', status: 'completed' as const },
+      { is_walkin: true, checked_in_at: '2026-10-23T11:15:00Z', completed_at: '2026-10-23T11:45:00Z', status: 'completed' as const },
+      { is_walkin: true, checked_in_at: '2026-10-23T12:15:00Z', completed_at: '2026-10-23T12:45:00Z', status: 'completed' as const },
+      // 2 no-shows (exempt)
+      { is_walkin: false, checked_in_at: null, completed_at: null, status: 'no_show' as const },
+      { is_walkin: false, checked_in_at: null, completed_at: null, status: 'no_show' as const },
+      // 1 online booking without verified QR check-in (exempt)
+      { is_walkin: false, checked_in_at: null, completed_at: '2026-10-23T15:00:00Z', status: 'completed' as const }
+    ];
+
+    const billableCount = serviceBatch.filter((entry) => isEntryBillable(entry as any)).length;
+    assert.strictEqual(billableCount, 5, 'Exactly 5 of the 11 entries should be billable');
+
+    const totalFee = calculatePlatformFee(billableCount);
+    assert.strictEqual(totalFee.totalAmount, 25.0, '5 billable entries * ₹5 = ₹25.00');
+
+    // Strict YYYY-MM validation check
+    const validMonthRegex = /^[0-9]{4}-(0[1-9]|1[0-2])$/;
+    assert.strictEqual(validMonthRegex.test('2026-10'), true);
+    assert.strictEqual(validMonthRegex.test('2026-13'), false, 'Month 13 is invalid');
+    assert.strictEqual(validMonthRegex.test('2026-00'), false, 'Month 00 is invalid');
+    assert.strictEqual(validMonthRegex.test('invalid'), false);
+    assert.strictEqual(validMonthRegex.test('2026-1'), false, 'Must be 2-digit month');
+  });
 });

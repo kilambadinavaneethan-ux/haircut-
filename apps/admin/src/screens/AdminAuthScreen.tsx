@@ -210,34 +210,36 @@ export default function AdminAuthScreen({ onLoginSuccess }: AdminAuthScreenProps
           </button>
         </form>
 
-        {/* Quick Demo Credentials */}
-        <div
-          style={{
-            marginTop: 24,
-            paddingTop: 20,
-            borderTop: '1px solid var(--border-color)',
-            textAlign: 'center'
-          }}
-        >
-          <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 10 }}>
-            Super Admin Seed Credentials:
-          </p>
-          <button
-            type="button"
-            onClick={fillQuickCredentials}
+        {/* Quick Demo Credentials - Gated strictly to development builds */}
+        {Boolean((import.meta as any).env?.DEV) && (
+          <div
             style={{
-              background: 'rgba(99, 102, 241, 0.1)',
-              border: '1px solid rgba(99, 102, 241, 0.3)',
-              color: '#A5B4FC',
-              padding: '6px 14px',
-              borderRadius: 6,
-              fontSize: 12,
-              fontWeight: 600
+              marginTop: 24,
+              paddingTop: 20,
+              borderTop: '1px solid var(--border-color)',
+              textAlign: 'center'
             }}
           >
-            Auto-Fill Admin (`admin@quickcut.com`)
-          </button>
-        </div>
+            <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 10 }}>
+              Super Admin Seed Credentials (DEV Mode Only):
+            </p>
+            <button
+              type="button"
+              onClick={fillQuickCredentials}
+              style={{
+                background: 'rgba(99, 102, 241, 0.1)',
+                border: '1px solid rgba(99, 102, 241, 0.3)',
+                color: '#A5B4FC',
+                padding: '6px 14px',
+                borderRadius: 6,
+                fontSize: 12,
+                fontWeight: 600
+              }}
+            >
+              Auto-Fill Admin (`admin@quickcut.com`)
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

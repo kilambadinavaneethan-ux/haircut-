@@ -43,6 +43,7 @@ export interface Database {
           longitude: number | null;
           status: 'pending' | 'approved' | 'suspended';
           is_queue_paused: boolean;
+          timezone?: string;
           opening_time: string;
           closing_time: string;
           created_at: string;
@@ -58,6 +59,7 @@ export interface Database {
           longitude?: number | null;
           status?: 'pending' | 'approved' | 'suspended';
           is_queue_paused?: boolean;
+          timezone?: string;
           opening_time?: string;
           closing_time?: string;
           created_at?: string;
@@ -73,6 +75,7 @@ export interface Database {
           longitude?: number | null;
           status?: 'pending' | 'approved' | 'suspended';
           is_queue_paused?: boolean;
+          timezone?: string;
           opening_time?: string;
           closing_time?: string;
           created_at?: string;
@@ -448,6 +451,43 @@ export interface Database {
           p_fee_record_id: string;
           p_payment_method?: string;
           p_transaction_ref?: string | null;
+        };
+        Returns: Json;
+      };
+      complete_service_atomic: {
+        Args: {
+          p_entry_id: string;
+        };
+        Returns: Json;
+      };
+      dispute_fee_record: {
+        Args: {
+          p_fee_record_id: string;
+          p_reason: string;
+        };
+        Returns: Json;
+      };
+      join_queue: {
+        Args: {
+          p_shop_id: string;
+          p_service_id: string;
+          p_barber_id?: string | null;
+        };
+        Returns: Json;
+      };
+      admin_set_user_role: {
+        Args: {
+          p_user_id: string;
+          p_new_role: 'customer' | 'staff' | 'owner' | 'admin';
+        };
+        Returns: Json;
+      };
+      admin_adjust_fee_record: {
+        Args: {
+          p_fee_record_id: string;
+          p_new_status: 'pending' | 'paid' | 'disputed' | 'waived';
+          p_adjusted_amount: number;
+          p_admin_note: string;
         };
         Returns: Json;
       };
