@@ -1,28 +1,44 @@
-import * as Notifications from 'expo-notifications';
-import { Platform } from 'react-native';
+import { Platform, Alert } from 'react-native';
 
-// Configure notification behavior when app is in foreground
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-    shouldShowBanner: true,
-    shouldShowList: true
-  })
-});
+let Notifications: any = null;
+let isNotificationsSupported = false;
+
+try {
+  // Dynamic require prevents crash in Expo Go on Android where ExpoTopicSubscriptionModule is absent
+  Notifications = require('expo-notifications');
+  if (Notifications && typeof Notifications.setNotificationHandler === 'function') {
+    Notifications.setNotificationHandler({
+      handleNotification: async () => ({
+        shouldShowAlert: true,
+        shouldPlaySound: true,
+        shouldSetBadge: false,
+        shouldShowBanner: true,
+        shouldShowList: true
+      })
+    });
+    isNotificationsSupported = true;
+  }
+} catch (error) {
+  // Expo Go (SDK 53+) does not bundle native push/topic subscription modules.
+  // Gracefully fallback to in-app alerts.
+  console.log('[QuickCut] Native push notifications not bundled in Expo Go. In-app alerts will be used.');
+}
 
 /**
  * Requests push notification permissions from the user
  */
 export async function requestNotificationPermissions(): Promise<boolean> {
+  if (!isNotificationsSupported || !Notifications) {
+    return false;
+  }
+
   try {
     const existing = await Notifications.getPermissionsAsync();
-    let isGranted = (existing as any)?.status === 'granted' || (existing as any)?.granted === true;
+    let isGranted = existing?.status === 'granted' || existing?.granted === true;
 
     if (!isGranted) {
       const requested = await Notifications.requestPermissionsAsync();
-      isGranted = (requested as any)?.status === 'granted' || (requested as any)?.granted === true;
+      isGranted = requested?.status === 'granted' || requested?.granted === true;
     }
 
     if (Platform.OS === 'android') {
@@ -45,17 +61,26 @@ export async function requestNotificationPermissions(): Promise<boolean> {
  * Triggers a push notification when 2 customers are ahead in queue
  */
 export async function notifyTwoAhead(shopName: string, queueNumber: number): Promise<void> {
-  try {
-    await Notifications.scheduleNotificationAsync({
-      content: {
-        title: '✂️ Your Turn is Approaching!',
-        body: `Only 2 customers ahead of ticket #${queueNumber} at ${shopName}. Please head to the shop for check-in!`,
-        sound: true,
-        data: { queueNumber, shopName }
-      },
-      trigger: null // Deliver immediately
-    });
-  } catch (error) {
-    console.warn('Failed to schedule notification:', error);
+  if (isNotificationsSupported && Notifications) {
+    try {
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title: '✂️ Your Turn is Approaching!',
+          body: `Only 2 customers ahead of ticket #${queueNumber} at ${shopName}. Please head to the shop for check-in!`,
+          sound: true,
+          data: { queueNumber, shopName }
+        },
+        trigger: null // Deliver immediately
+      });
+      return;
+    } catch (error) {
+      console.warn('Failed to schedule notification:', error);
+    }
   }
+
+  // Graceful fallback for Expo Go: show on-screen Alert
+  Alert.alert(
+    '✂️ Your Turn is Approaching!',
+    `Only 2 customers ahead of ticket #${queueNumber} at ${shopName}. Please head to the shop for check-in!`
+  );
 }
