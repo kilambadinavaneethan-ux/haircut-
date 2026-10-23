@@ -78,16 +78,29 @@ FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
 -- 4. Trigger to Prevent Unauthorized Direct Role Changes on Profiles Table
 CREATE OR REPLACE FUNCTION public.fn_prevent_profile_role_escalation()
 RETURNS TRIGGER AS $$
+DECLARE
+    v_is_internal BOOLEAN;
+    v_is_db_admin BOOLEAN;
 BEGIN
+    -- Check if this change originates from a trusted internal trigger or admin RPC
+    v_is_internal := (current_setting('quickcut.internal_role_change', true) = 'true');
+
+    -- Check if running via SQL console, migrations, postgres superuser, or service_role
+    v_is_db_admin := (
+        auth.uid() IS NULL 
+        OR current_user IN ('postgres', 'supabase_admin', 'service_role')
+        OR (COALESCE(current_setting('request.jwt.claim.role', true), '') = 'service_role')
+    );
+
     IF TG_OP = 'INSERT' THEN
         -- Non-admins cannot insert any role other than customer
-        IF NEW.role != 'customer' AND NOT public.is_admin() THEN
+        IF NEW.role != 'customer' AND NOT (v_is_internal OR v_is_db_admin OR public.is_admin()) THEN
             NEW.role := 'customer'::user_role;
         END IF;
     ELSIF TG_OP = 'UPDATE' THEN
-        -- If role is changing, only a verified admin can authorize it
+        -- If role is changing, only authorized callers or internal workflows can modify it
         IF NEW.role IS DISTINCT FROM OLD.role THEN
-            IF NOT public.is_admin() THEN
+            IF NOT (v_is_internal OR v_is_db_admin OR public.is_admin()) THEN
                 RAISE EXCEPTION 'Unauthorized: Only platform administrators can change account roles.';
             END IF;
         END IF;
@@ -110,6 +123,7 @@ CREATE OR REPLACE FUNCTION public.fn_handle_shop_status_change()
 RETURNS TRIGGER AS $$
 BEGIN
     IF NEW.status = 'approved' AND (OLD.status IS NULL OR OLD.status != 'approved') THEN
+        PERFORM set_config('quickcut.internal_role_change', 'true', true);
         UPDATE public.profiles
         SET role = 'owner'::user_role, updated_at = timezone('utc'::text, now())
         WHERE id = NEW.owner_id AND role = 'customer';
@@ -128,6 +142,7 @@ EXECUTE FUNCTION public.fn_handle_shop_status_change();
 CREATE OR REPLACE FUNCTION public.fn_handle_staff_assignment()
 RETURNS TRIGGER AS $$
 BEGIN
+    PERFORM set_config('quickcut.internal_role_change', 'true', true);
     UPDATE public.profiles
     SET role = 'staff'::user_role, updated_at = timezone('utc'::text, now())
     WHERE id = NEW.user_id AND role = 'customer';
@@ -158,6 +173,8 @@ BEGIN
     IF NOT FOUND THEN
         RAISE EXCEPTION 'User profile not found.';
     END IF;
+
+    PERFORM set_config('quickcut.internal_role_change', 'true', true);
 
     UPDATE public.profiles
     SET role = p_new_role, updated_at = timezone('utc'::text, now())

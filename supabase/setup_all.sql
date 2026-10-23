@@ -819,18 +819,83 @@ $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 -- QuickCut Platform - Seed Script
 -- File: supabase/seed.sql
 
--- Safe cleanup for fresh seed
-TRUNCATE TABLE public.audit_logs CASCADE;
-TRUNCATE TABLE public.support_tickets CASCADE;
-TRUNCATE TABLE public.notifications CASCADE;
-TRUNCATE TABLE public.payments CASCADE;
-TRUNCATE TABLE public.fee_records CASCADE;
-TRUNCATE TABLE public.queue_entries CASCADE;
-TRUNCATE TABLE public.services CASCADE;
-TRUNCATE TABLE public.barbers CASCADE;
-TRUNCATE TABLE public.shop_staff CASCADE;
-TRUNCATE TABLE public.shops CASCADE;
-TRUNCATE TABLE public.profiles CASCADE;
+-- Security & Invariants Protection Triggers (Pre-seed definition)
+CREATE OR REPLACE FUNCTION public.fn_prevent_profile_role_escalation()
+RETURNS TRIGGER AS $
+DECLARE
+    v_is_internal BOOLEAN;
+    v_is_db_admin BOOLEAN;
+BEGIN
+    -- Check if this change originates from a trusted internal trigger or admin RPC
+    v_is_internal := (current_setting('quickcut.internal_role_change', true) = 'true');
+
+    -- Check if running via SQL console, migrations, postgres superuser, or service_role
+    v_is_db_admin := (
+        auth.uid() IS NULL 
+        OR current_user IN ('postgres', 'supabase_admin', 'service_role')
+        OR (COALESCE(current_setting('request.jwt.claim.role', true), '') = 'service_role')
+    );
+
+    IF TG_OP = 'INSERT' THEN
+        -- Non-admins cannot insert any role other than customer
+        IF NEW.role != 'customer' AND NOT (v_is_internal OR v_is_db_admin OR public.is_admin()) THEN
+            NEW.role := 'customer'::user_role;
+        END IF;
+    ELSIF TG_OP = 'UPDATE' THEN
+        -- If role is changing, only authorized callers or internal workflows can modify it
+        IF NEW.role IS DISTINCT FROM OLD.role THEN
+            IF NOT (v_is_internal OR v_is_db_admin OR public.is_admin()) THEN
+                RAISE EXCEPTION 'Unauthorized: Only platform administrators can change account roles.';
+            END IF;
+        END IF;
+    END IF;
+
+    NEW.updated_at := timezone('utc'::text, now());
+    RETURN NEW;
+END;
+$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
+
+DROP TRIGGER IF EXISTS trg_prevent_profile_role_escalation ON public.profiles;
+CREATE TRIGGER trg_prevent_profile_role_escalation
+BEFORE INSERT OR UPDATE ON public.profiles
+FOR EACH ROW
+EXECUTE FUNCTION public.fn_prevent_profile_role_escalation();
+
+CREATE OR REPLACE FUNCTION public.fn_handle_shop_status_change()
+RETURNS TRIGGER AS $
+BEGIN
+    IF NEW.status = 'approved' AND (OLD.status IS NULL OR OLD.status != 'approved') THEN
+        PERFORM set_config('quickcut.internal_role_change', 'true', true);
+        UPDATE public.profiles
+        SET role = 'owner'::user_role, updated_at = timezone('utc'::text, now())
+        WHERE id = NEW.owner_id AND role = 'customer';
+    END IF;
+    RETURN NEW;
+END;
+$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
+
+DROP TRIGGER IF EXISTS trg_handle_shop_status_change ON public.shops;
+CREATE TRIGGER trg_handle_shop_status_change
+AFTER UPDATE OF status ON public.shops
+FOR EACH ROW
+EXECUTE FUNCTION public.fn_handle_shop_status_change();
+
+CREATE OR REPLACE FUNCTION public.fn_handle_staff_assignment()
+RETURNS TRIGGER AS $
+BEGIN
+    PERFORM set_config('quickcut.internal_role_change', 'true', true);
+    UPDATE public.profiles
+    SET role = 'staff'::user_role, updated_at = timezone('utc'::text, now())
+    WHERE id = NEW.user_id AND role = 'customer';
+    RETURN NEW;
+END;
+$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
+
+DROP TRIGGER IF EXISTS trg_handle_staff_assignment ON public.shop_staff;
+CREATE TRIGGER trg_handle_staff_assignment
+AFTER INSERT ON public.shop_staff
+FOR EACH ROW
+EXECUTE FUNCTION public.fn_handle_staff_assignment();
 
 -- 1. Create Auth Users (Pre-registered test accounts with password: Password123!)
 -- Admin
@@ -1016,7 +1081,7 @@ VALUES (
     'approved',
     '09:00:00',
     '21:00:00'
-);
+) ON CONFLICT (id) DO NOTHING;
 
 -- 2. Urban Fades Lounge (Pending Admin Approval)
 INSERT INTO public.shops (id, owner_id, name, address, phone, latitude, longitude, status, opening_time, closing_time)
@@ -1031,7 +1096,7 @@ VALUES (
     'pending',
     '10:00:00',
     '22:00:00'
-);
+) ON CONFLICT (id) DO NOTHING;
 
 -- Insert Staff Assignment
 INSERT INTO public.shop_staff (id, shop_id, user_id, role)
@@ -1040,7 +1105,7 @@ VALUES (
     '10000000-0000-0000-0000-000000000001',
     '00000000-0000-0000-0000-000000000003',
     'senior_barber'
-);
+) ON CONFLICT (id) DO NOTHING;
 
 -- Insert Barbers / Chairs
 INSERT INTO public.barbers (id, shop_id, user_id, name, is_active)
@@ -1065,7 +1130,7 @@ VALUES
     NULL,
     'Marco Rossi (Beard Artist)',
     true
-);
+) ON CONFLICT (id) DO NOTHING;
 
 -- Insert Services
 INSERT INTO public.services (id, shop_id, name, price, avg_minutes, is_active)
@@ -1093,7 +1158,7 @@ VALUES
     650.00,
     45,
     true
-);
+) ON CONFLICT (id) DO NOTHING;
 
 -- Insert Queue Entries demonstrating logic:
 -- 1. In Service entry (Rahul Sharma, Classic Haircut = 25 mins)
@@ -1114,7 +1179,7 @@ VALUES (
     timezone('utc'::text, now() - INTERVAL '10 minutes'),
     false,
     timezone('utc'::text, now() - INTERVAL '30 minutes')
-);
+) ON CONFLICT (id) DO NOTHING;
 
 -- 2. Waiting entry (Priya Patel, Beard/Trim = 15 mins). 
 -- Wait time will be calculated dynamically based on entries ahead!
@@ -1133,7 +1198,7 @@ VALUES (
     'b2222222-2222-2222-2222-222222222222',
     false,
     timezone('utc'::text, now() - INTERVAL '10 minutes')
-);
+) ON CONFLICT (id) DO NOTHING;
 
 -- 3. Billable Completed entry (Customer QR Check-in + Staff Completion + Not Walkin)
 -- Trigger will automatically compute is_billable = true!
@@ -1155,7 +1220,7 @@ VALUES (
     timezone('utc'::text, now() - INTERVAL '1 hour 20 minutes'),
     false,
     timezone('utc'::text, now() - INTERVAL '2 hours 15 minutes')
-);
+) ON CONFLICT (id) DO NOTHING;
 
 -- 4. Completed Walk-In entry (Should NOT be billable: is_walkin = true)
 INSERT INTO public.queue_entries (
@@ -1175,7 +1240,7 @@ VALUES (
     timezone('utc'::text, now() - INTERVAL '40 minutes'),
     true,
     timezone('utc'::text, now() - INTERVAL '1 hour')
-);
+) ON CONFLICT (id) DO NOTHING;
 
 -- Insert Fee Record for Shop (Demonstrates Rs 5 per billable service)
 INSERT INTO public.fee_records (
@@ -1191,7 +1256,7 @@ VALUES (
     'pending',
     timezone('utc'::text, now() + INTERVAL '5 days'),
     NULL
-);
+) ON CONFLICT (id) DO NOTHING;
 
 -- Insert Sample Payment
 INSERT INTO public.payments (
@@ -1207,7 +1272,7 @@ VALUES (
     'UPI',
     'UPI/20261022/984719284',
     timezone('utc'::text, now() - INTERVAL '1 day')
-);
+) ON CONFLICT (id) DO NOTHING;
 
 -- Insert Notifications
 INSERT INTO public.notifications (user_id, title, message, type, read)
@@ -1869,16 +1934,29 @@ FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
 -- 4. Trigger to Prevent Unauthorized Direct Role Changes on Profiles Table
 CREATE OR REPLACE FUNCTION public.fn_prevent_profile_role_escalation()
 RETURNS TRIGGER AS $$
+DECLARE
+    v_is_internal BOOLEAN;
+    v_is_db_admin BOOLEAN;
 BEGIN
+    -- Check if this change originates from a trusted internal trigger or admin RPC
+    v_is_internal := (current_setting('quickcut.internal_role_change', true) = 'true');
+
+    -- Check if running via SQL console, migrations, postgres superuser, or service_role
+    v_is_db_admin := (
+        auth.uid() IS NULL 
+        OR current_user IN ('postgres', 'supabase_admin', 'service_role')
+        OR (COALESCE(current_setting('request.jwt.claim.role', true), '') = 'service_role')
+    );
+
     IF TG_OP = 'INSERT' THEN
         -- Non-admins cannot insert any role other than customer
-        IF NEW.role != 'customer' AND NOT public.is_admin() THEN
+        IF NEW.role != 'customer' AND NOT (v_is_internal OR v_is_db_admin OR public.is_admin()) THEN
             NEW.role := 'customer'::user_role;
         END IF;
     ELSIF TG_OP = 'UPDATE' THEN
-        -- If role is changing, only a verified admin can authorize it
+        -- If role is changing, only authorized callers or internal workflows can modify it
         IF NEW.role IS DISTINCT FROM OLD.role THEN
-            IF NOT public.is_admin() THEN
+            IF NOT (v_is_internal OR v_is_db_admin OR public.is_admin()) THEN
                 RAISE EXCEPTION 'Unauthorized: Only platform administrators can change account roles.';
             END IF;
         END IF;
@@ -1901,6 +1979,7 @@ CREATE OR REPLACE FUNCTION public.fn_handle_shop_status_change()
 RETURNS TRIGGER AS $$
 BEGIN
     IF NEW.status = 'approved' AND (OLD.status IS NULL OR OLD.status != 'approved') THEN
+        PERFORM set_config('quickcut.internal_role_change', 'true', true);
         UPDATE public.profiles
         SET role = 'owner'::user_role, updated_at = timezone('utc'::text, now())
         WHERE id = NEW.owner_id AND role = 'customer';
@@ -1919,6 +1998,7 @@ EXECUTE FUNCTION public.fn_handle_shop_status_change();
 CREATE OR REPLACE FUNCTION public.fn_handle_staff_assignment()
 RETURNS TRIGGER AS $$
 BEGIN
+    PERFORM set_config('quickcut.internal_role_change', 'true', true);
     UPDATE public.profiles
     SET role = 'staff'::user_role, updated_at = timezone('utc'::text, now())
     WHERE id = NEW.user_id AND role = 'customer';
@@ -1949,6 +2029,8 @@ BEGIN
     IF NOT FOUND THEN
         RAISE EXCEPTION 'User profile not found.';
     END IF;
+
+    PERFORM set_config('quickcut.internal_role_change', 'true', true);
 
     UPDATE public.profiles
     SET role = p_new_role, updated_at = timezone('utc'::text, now())
