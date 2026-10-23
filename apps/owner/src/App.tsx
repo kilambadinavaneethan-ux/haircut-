@@ -234,30 +234,25 @@ export default function OwnerApp() {
     }
   };
 
-  // Pay Fee Statement (Settle via Mock UPI)
+  // Pay Fee Statement (Settle via Verified Server-Side Payment RPC)
   const handlePayFeeRecord = async (feeRecord: FeeRecord) => {
     try {
-      // 1. Create payment record
-      const { error: payErr } = await (supabase.from('payments') as any).insert({
-        fee_record_id: feeRecord.id,
-        shop_id: feeRecord.shop_id,
-        amount: feeRecord.amount,
-        currency: 'INR',
-        status: 'completed',
-        payment_method: 'UPI',
-        transaction_ref: `UPI/${new Date().getFullYear()}/${Math.floor(10000000 + Math.random() * 90000000)}`
+      const ref = `UPI/${new Date().getFullYear()}/${Math.floor(10000000 + Math.random() * 90000000)}`;
+
+      // Execute atomic server-side payment processing RPC
+      const { data, error } = await (supabase.rpc as any)('process_fee_payment', {
+        p_fee_record_id: feeRecord.id,
+        p_payment_method: 'UPI',
+        p_transaction_ref: ref
       });
-      if (payErr) throw payErr;
 
-      // 2. Update fee record status
-      await (supabase.from('fee_records') as any)
-        .update({ status: 'paid' })
-        .eq('id', feeRecord.id);
+      if (error) throw error;
 
-      alert(`Payment of ${formatFeeAmount(feeRecord.amount)} completed successfully via UPI!`);
+      alert(`Payment of ${formatFeeAmount(feeRecord.amount)} settled successfully via UPI!\nRef: ${ref}`);
       loadShopDetails();
-    } catch (err) {
-      alert('Error recording payment');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Error recording payment';
+      alert(`Payment settlement error: ${msg}`);
     }
   };
 

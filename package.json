@@ -19,6 +19,7 @@
     "build:admin": "npm run build --workspace=@quickcut/admin",
     "build:owner": "npm run build --workspace=@quickcut/owner",
     "build:all": "npm run build:shared && npm run build:admin && npm run build:owner",
+    "test": "npx tsx --test packages/shared/tests/quickcut.test.ts",
     "db:start": "npx supabase start",
     "db:reset": "npx supabase db reset",
     "db:seed": "npx supabase db seed",

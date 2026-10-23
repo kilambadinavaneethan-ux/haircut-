@@ -51,38 +51,55 @@ export function LiveQueueScreen({
     }
 
     try {
-      // 1. Fetch entries in the shop ahead of customer
-      const { data: entriesAhead, error } = await supabase
+      // 1. Try secure database RPC first
+      const { data: rpcData, error: rpcError } = await (supabase.rpc as any)(
+        'get_estimated_wait_time',
+        { target_queue_entry_id: activeEntry.id }
+      );
+
+      if (!rpcError && rpcData) {
+        const ahead = rpcData.people_ahead || 0;
+        const mins = rpcData.estimated_minutes || 0;
+        setPeopleAhead(ahead);
+        setEstimatedMinutes(mins);
+
+        if (ahead === 2 && !notifiedTwoAheadRef.current) {
+          notifiedTwoAheadRef.current = true;
+          await notifyTwoAhead(
+            activeEntry.shop?.name || 'the Barbershop',
+            activeEntry.queue_number
+          );
+        }
+        return;
+      }
+
+      // 2. Fallback query (Strict deduplication - no double counting)
+      const { data: waitingAhead } = await supabase
         .from('queue_entries')
         .select('id, status, created_at, service:services(avg_minutes)')
         .eq('shop_id', activeEntry.shop_id)
-        .in('status', ['waiting', 'in_service'])
+        .eq('status', 'waiting')
         .lt('created_at', activeEntry.created_at);
 
-      if (error) throw error;
-
-      // Also include currently in_service entry in the shop
       const { data: inServiceEntries } = await supabase
         .from('queue_entries')
         .select('id, service:services(avg_minutes)')
         .eq('shop_id', activeEntry.shop_id)
         .eq('status', 'in_service');
 
-      const aheadCount = (entriesAhead?.length || 0) + (inServiceEntries?.length || 0);
+      const uniqueInService = (inServiceEntries as any[] || []).filter((e: any) => e.id !== activeEntry.id);
+      const uniqueWaiting = (waitingAhead as any[]) || [];
+
+      const aheadCount = uniqueWaiting.length + uniqueInService.length;
       setPeopleAhead(aheadCount);
 
-      // Sum of avg_minutes of services ahead in the queue
       let totalWait = 0;
-      if (entriesAhead) {
-        entriesAhead.forEach((e: any) => {
-          totalWait += e.service?.avg_minutes || 20;
-        });
-      }
-      if (inServiceEntries) {
-        inServiceEntries.forEach((e: any) => {
-          totalWait += e.service?.avg_minutes || 20;
-        });
-      }
+      uniqueWaiting.forEach((e: any) => {
+        totalWait += e.service?.avg_minutes || 20;
+      });
+      uniqueInService.forEach((e: any) => {
+        totalWait += e.service?.avg_minutes || 20;
+      });
       setEstimatedMinutes(totalWait);
 
       // Trigger Push Notification when exactly 2 customers are ahead
@@ -164,15 +181,21 @@ export function LiveQueueScreen({
   const handleCheckInSuccess = async (tokenOrCode: string) => {
     if (!activeEntry) return;
 
-    const { error } = await (supabase.from('queue_entries') as any)
-      .update({
-        checked_in_at: new Date().toISOString()
-      })
-      .eq('id', activeEntry.id);
+    try {
+      // 1. Try secure database RPC
+      const { data, error } = await (supabase.rpc as any)('verify_qr_checkin', {
+        p_entry_id: activeEntry.id,
+        p_qr_token: tokenOrCode.trim()
+      });
 
-    if (error) throw error;
-    Alert.alert('Checked In Successfully!', 'Your arrival has been verified by the shop.');
-    await onRefresh();
+      if (error) throw error;
+
+      Alert.alert('Checked In Successfully!', 'Your arrival has been verified by the shop.');
+      await onRefresh();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Invalid shop QR code';
+      Alert.alert('Check-In Failed', msg);
+    }
   };
 
   if (!activeEntry) {

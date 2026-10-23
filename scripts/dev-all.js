@@ -39,13 +39,29 @@ const apps = [
 const children = [];
 const resetColor = '\x1b[0m';
 
+const os = require('os');
+
+function getLocalIp() {
+  const nets = os.networkInterfaces();
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name]) {
+      if (net.family === 'IPv4' && !net.internal) {
+        return net.address;
+      }
+    }
+  }
+  return 'localhost';
+}
+
+const localIp = getLocalIp();
+
 console.log('\x1b[1m\x1b[34m================================================================');
 console.log('  QuickCut Multi-App Orchestrator - Starting All 4 Services');
 console.log('================================================================\x1b[0m\n');
-console.log('  - Customer App (Expo):   exp://10.151.143.212:8081 (or http://localhost:8081)');
-console.log('  - Staff App (Expo):      exp://10.151.143.212:8082 (or http://localhost:8082)');
-console.log('  - Owner Portal (Web):    http://localhost:3001 (or http://10.151.143.212:3001)');
-console.log('  - Admin Portal (Web):    http://localhost:3002 (or http://10.151.143.212:3002)\n');
+console.log(`  - Customer App (Expo):   exp://${localIp}:8081 (or http://localhost:8081)`);
+console.log(`  - Staff App (Expo):      exp://${localIp}:8082 (or http://localhost:8082)`);
+console.log(`  - Owner Portal (Web):    http://localhost:3001 (or http://${localIp}:3001)`);
+console.log(`  - Admin Portal (Web):    http://localhost:3002 (or http://${localIp}:3002)\n`);
 
 for (const app of apps) {
   const child = spawn(app.cmd, app.args, {

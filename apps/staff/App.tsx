@@ -117,23 +117,14 @@ export default function StaffApp() {
       if (staffData && (staffData as any).shop) {
         const shop = (staffData as any).shop as Shop;
         setAssignedShop(shop);
+        setIsQueuePaused(!!shop.is_queue_paused);
         await loadShopServices(shop.id);
       } else {
-        // Fallback for seed staff if mapping isn't active
-        const { data: anyShop } = await supabase
-          .from('shops')
-          .select('*')
-          .limit(1)
-          .maybeSingle();
-
-        if (anyShop) {
-          const fallbackShop = anyShop as unknown as Shop;
-          setAssignedShop(fallbackShop);
-          await loadShopServices(fallbackShop.id);
-        }
+        setAssignedShop(null);
       }
     } catch (err) {
       console.warn('Error loading staff shop:', err);
+      setAssignedShop(null);
     }
   };
 
@@ -214,23 +205,13 @@ export default function StaffApp() {
   const inChairEntry = queue.find((e) => e.status === 'in_service');
   const waitingEntries = queue.filter((e) => e.status === 'waiting');
 
-  // Action: Start Service
+  // Action: Start Service (Atomic database verification)
   const handleStartService = async (entry: QueueEntryWithDetails) => {
-    if (inChairEntry) {
-      Alert.alert(
-        'Chair Occupied',
-        `Customer #${inChairEntry.queue_number} (${inChairEntry.guest_name || 'Customer'}) is still in the chair. Please complete that service first.`
-      );
-      return;
-    }
-
     try {
-      const { error } = await (supabase.from('queue_entries') as any)
-        .update({
-          status: 'in_service',
-          called_at: new Date().toISOString()
-        })
-        .eq('id', entry.id);
+      const { data, error } = await (supabase.rpc as any)('start_service_atomic', {
+        p_entry_id: entry.id,
+        p_barber_id: entry.barber_id || null
+      });
 
       if (error) throw error;
 
@@ -243,7 +224,7 @@ export default function StaffApp() {
       await loadTodayQueue();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Could not start service';
-      Alert.alert('Error', msg);
+      Alert.alert('Cannot Start Service', msg);
     }
   };
 
@@ -407,52 +388,70 @@ export default function StaffApp() {
     await loadTodayQueue();
   };
 
-  // Action: Verify QR Check-in Code
+  // Action: Verify QR Check-in Code (Atomic verification RPC)
   const handleVerifyQRScan = async (codeOrToken: string) => {
+    const trimmed = codeOrToken.trim();
     const target = targetEntryForQR || queue.find(
       (e) =>
-        e.qr_code_token.toLowerCase().includes(codeOrToken.toLowerCase()) ||
-        String(e.queue_number) === codeOrToken.trim()
+        e.qr_code_token.toLowerCase() === trimmed.toLowerCase() ||
+        String(e.queue_number) === trimmed
     );
 
     if (!target) {
       throw new Error(`No waiting ticket matched code "${codeOrToken}".`);
     }
 
-    const { error } = await (supabase.from('queue_entries') as any)
-      .update({
-        checked_in_at: new Date().toISOString()
-      })
-      .eq('id', target.id);
+    try {
+      const { data, error } = await (supabase.rpc as any)('verify_qr_checkin', {
+        p_entry_id: target.id,
+        p_qr_token: trimmed
+      });
 
-    if (error) throw error;
+      if (error) throw error;
 
-    await logAudit('CUSTOMER_QR_CHECKED_IN', target.id, {
-      queue_number: target.queue_number,
-      verified_by_staff: true
-    });
+      await logAudit('CUSTOMER_QR_CHECKED_IN', target.id, {
+        queue_number: target.queue_number,
+        verified_by_staff: true
+      });
 
-    Alert.alert('Check-In Verified', `Customer #${target.queue_number} is now verified in-store!`);
-    setTargetEntryForQR(null);
-    await loadTodayQueue();
+      Alert.alert('Check-In Verified', `Customer #${target.queue_number} is now verified in-store!`);
+      setTargetEntryForQR(null);
+      await loadTodayQueue();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Could not verify check-in';
+      throw new Error(msg);
+    }
   };
 
-  // Action: Pause / Resume Queue
+  // Action: Pause / Resume Queue (Persisted to database)
   const handleTogglePauseQueue = async () => {
+    if (!assignedShop) return;
     const nextState = !isQueuePaused;
-    setIsQueuePaused(nextState);
 
-    await logAudit(nextState ? 'QUEUE_PAUSED' : 'QUEUE_RESUMED', assignedShop?.id || 'shop', {
-      paused: nextState,
-      timestamp: new Date().toISOString()
-    });
+    try {
+      const { error } = await (supabase.from('shops') as any)
+        .update({ is_queue_paused: nextState, updated_at: new Date().toISOString() })
+        .eq('id', assignedShop.id);
 
-    Alert.alert(
-      nextState ? 'Queue Paused' : 'Queue Resumed',
-      nextState
-        ? 'Queue is now paused. Notice displayed to avoid taking more arrivals.'
-        : 'Queue resumed. Ready to seat next customers.'
-    );
+      if (error) throw error;
+
+      setIsQueuePaused(nextState);
+
+      await logAudit(nextState ? 'QUEUE_PAUSED' : 'QUEUE_RESUMED', assignedShop.id, {
+        paused: nextState,
+        timestamp: new Date().toISOString()
+      });
+
+      Alert.alert(
+        nextState ? 'Queue Paused' : 'Queue Resumed',
+        nextState
+          ? 'Queue is now paused in database. Notice is displayed to customers.'
+          : 'Queue resumed. Ready to seat next customers.'
+      );
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to update pause state';
+      Alert.alert('Error', msg);
+    }
   };
 
   // Sign out
@@ -486,6 +485,39 @@ export default function StaffApp() {
             }
           }}
         />
+      </SafeAreaView>
+    );
+  }
+
+  // Unassigned Staff View (Strict authorization requirement)
+  if (!assignedShop) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <StatusBar barStyle="light-content" backgroundColor="#090D16" />
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 28 }}>
+          <View style={{ width: 56, height: 56, borderRadius: 28, backgroundColor: 'rgba(239, 68, 68, 0.15)', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(239, 68, 68, 0.3)' }}>
+            <Text style={{ fontSize: 24 }}>⚠️</Text>
+          </View>
+          <Text style={[styles.brandTitle, { fontSize: 20, textAlign: 'center', marginTop: 16 }]}>
+            No Assigned Barber Shop
+          </Text>
+          <Text style={{ color: '#94A3B8', fontSize: 14, textAlign: 'center', marginTop: 8, lineHeight: 22 }}>
+            Your account ({sessionUser.email}) is not currently linked to an active barber shop.
+            {'\n\n'}
+            Please ask your shop owner to link your User ID in their Owner Dashboard:
+          </Text>
+          <View style={{ backgroundColor: '#1E293B', padding: 12, borderRadius: 8, marginTop: 14, width: '100%' }}>
+            <Text style={{ color: '#F8FAFC', fontSize: 13, textAlign: 'center', fontWeight: '700' }}>
+              {sessionUser.id}
+            </Text>
+          </View>
+          <TouchableOpacity
+            style={[styles.logoutBtn, { marginTop: 28, paddingHorizontal: 28, paddingVertical: 12 }]}
+            onPress={handleSignOut}
+          >
+            <Text style={styles.logoutBtnText}>Log Out</Text>
+          </TouchableOpacity>
+        </View>
       </SafeAreaView>
     );
   }

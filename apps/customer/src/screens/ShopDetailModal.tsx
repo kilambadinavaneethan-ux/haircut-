@@ -22,6 +22,9 @@ interface ShopDetailModalProps {
   queueLength: number;
   estimatedWaitMinutes: number;
   customerId: string;
+  hasActiveTicket?: boolean;
+  activeTicketNumber?: number;
+  activeShopName?: string;
   onClose: () => void;
   onJoinedQueueSuccess: (newEntryId: string) => void;
 }
@@ -32,6 +35,9 @@ export function ShopDetailModal({
   queueLength,
   estimatedWaitMinutes,
   customerId,
+  hasActiveTicket,
+  activeTicketNumber,
+  activeShopName,
   onClose,
   onJoinedQueueSuccess
 }: ShopDetailModalProps) {
@@ -103,6 +109,22 @@ export function ShopDetailModal({
       return;
     }
 
+    if (hasActiveTicket) {
+      Alert.alert(
+        'Active Ticket Exists',
+        `You currently hold active ticket #${activeTicketNumber || ''} at ${activeShopName || 'another shop'}.\n\nUnder QuickCut policy, customers may only hold 1 active queue ticket at a time. Please leave or complete your current ticket first.`
+      );
+      return;
+    }
+
+    if (shop.is_queue_paused) {
+      Alert.alert(
+        'Queue Temporarily Paused',
+        'This barber shop has temporarily paused accepting new entries. Please check back shortly.'
+      );
+      return;
+    }
+
     setIsJoining(true);
     setErrorMsg(null);
 
@@ -130,7 +152,10 @@ export function ShopDetailModal({
       onJoinedQueueSuccess(created.id);
       onClose();
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Could not join queue';
+      let message = err instanceof Error ? err.message : 'Could not join queue';
+      if (message.includes('uq_active_customer_queue') || message.includes('duplicate')) {
+        message = 'You already have an active queue ticket in progress.';
+      }
       setErrorMsg(message);
       Alert.alert('Failed to Join Queue', message);
     } finally {
@@ -219,12 +244,19 @@ export function ShopDetailModal({
 
           {/* CTA Join Queue */}
           <TouchableOpacity
-            style={styles.joinBtn}
+            style={[
+              styles.joinBtn,
+              (shop.is_queue_paused || hasActiveTicket) && { backgroundColor: '#475569' }
+            ]}
             onPress={handleJoinQueue}
-            disabled={isJoining || loadingServices || !selectedServiceId}
+            disabled={isJoining || loadingServices || !selectedServiceId || shop.is_queue_paused || hasActiveTicket}
           >
             {isJoining ? (
               <ActivityIndicator color="#0F172A" />
+            ) : shop.is_queue_paused ? (
+              <Text style={styles.joinBtnText}>⏸️ Queue Paused by Shop</Text>
+            ) : hasActiveTicket ? (
+              <Text style={styles.joinBtnText}>Active Ticket Already Held</Text>
             ) : (
               <Text style={styles.joinBtnText}>Join Live Queue</Text>
             )}

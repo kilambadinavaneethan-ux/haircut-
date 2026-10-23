@@ -382,10 +382,15 @@ export default function CustomerApp() {
 
                 {/* CTA Action */}
                 <TouchableOpacity
-                  style={styles.viewShopBtn}
+                  style={[
+                    styles.viewShopBtn,
+                    shop.is_queue_paused && { backgroundColor: '#334155' }
+                  ]}
                   onPress={() => handleOpenShopDetail(shop)}
                 >
-                  <Text style={styles.viewShopBtnText}>View Services & Join Queue</Text>
+                  <Text style={styles.viewShopBtnText}>
+                    {shop.is_queue_paused ? '⏸️ Queue Paused — View Details' : 'View Services & Join Queue'}
+                  </Text>
                 </TouchableOpacity>
               </View>
             ))
@@ -432,6 +437,9 @@ export default function CustomerApp() {
         queueLength={selectedShop?.queueLength || 0}
         estimatedWaitMinutes={selectedShop?.estimatedWaitMinutes || 0}
         customerId={sessionUser.id}
+        hasActiveTicket={!!activeQueueEntry}
+        activeTicketNumber={activeQueueEntry?.queue_number}
+        activeShopName={activeQueueEntry?.shop?.name}
         onClose={() => setDetailModalVisible(false)}
         onJoinedQueueSuccess={handleQueueJoined}
       />

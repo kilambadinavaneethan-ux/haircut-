@@ -42,6 +42,7 @@ export interface Database {
           latitude: number | null;
           longitude: number | null;
           status: 'pending' | 'approved' | 'suspended';
+          is_queue_paused: boolean;
           opening_time: string;
           closing_time: string;
           created_at: string;
@@ -56,6 +57,7 @@ export interface Database {
           latitude?: number | null;
           longitude?: number | null;
           status?: 'pending' | 'approved' | 'suspended';
+          is_queue_paused?: boolean;
           opening_time?: string;
           closing_time?: string;
           created_at?: string;
@@ -70,6 +72,7 @@ export interface Database {
           latitude?: number | null;
           longitude?: number | null;
           status?: 'pending' | 'approved' | 'suspended';
+          is_queue_paused?: boolean;
           opening_time?: string;
           closing_time?: string;
           created_at?: string;
@@ -171,6 +174,7 @@ export interface Database {
           completed_at: string | null;
           is_walkin: boolean;
           is_billable: boolean;
+          queue_date: string;
           created_at: string;
           updated_at: string;
         };
@@ -190,6 +194,7 @@ export interface Database {
           completed_at?: string | null;
           is_walkin?: boolean;
           is_billable?: boolean;
+          queue_date?: string;
           created_at?: string;
           updated_at?: string;
         };
@@ -209,6 +214,7 @@ export interface Database {
           completed_at?: string | null;
           is_walkin?: boolean;
           is_billable?: boolean;
+          queue_date?: string;
           created_at?: string;
           updated_at?: string;
         };
@@ -422,6 +428,28 @@ export interface Database {
           p_month: string;
         };
         Returns: string;
+      };
+      start_service_atomic: {
+        Args: {
+          p_entry_id: string;
+          p_barber_id?: string | null;
+        };
+        Returns: Json;
+      };
+      verify_qr_checkin: {
+        Args: {
+          p_entry_id: string;
+          p_qr_token: string;
+        };
+        Returns: Json;
+      };
+      process_fee_payment: {
+        Args: {
+          p_fee_record_id: string;
+          p_payment_method?: string;
+          p_transaction_ref?: string | null;
+        };
+        Returns: Json;
       };
     };
   };

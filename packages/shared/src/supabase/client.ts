@@ -12,11 +12,14 @@ const getEnv = (key: string): string | undefined => {
   if (typeof process !== 'undefined' && process.env && process.env[key]) {
     return process.env[key];
   }
-  // Vite environment fallback
-  // @ts-expect-error import.meta.env check
-  if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env[key]) {
-    // @ts-expect-error import.meta.env access
-    return import.meta.env[key];
+  try {
+    // Dynamic access avoids CJS syntax conflict for import.meta
+    const meta = (new Function('try { return import.meta; } catch (e) { return undefined; }'))();
+    if (meta && meta.env && meta.env[key]) {
+      return meta.env[key];
+    }
+  } catch {
+    // Ignore in non-ESM environments
   }
   return undefined;
 };

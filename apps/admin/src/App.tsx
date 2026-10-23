@@ -35,6 +35,7 @@ const MOCK_SHOPS: Shop[] = [
     latitude: 12.9716,
     longitude: 77.5946,
     status: 'approved',
+    is_queue_paused: false,
     opening_time: '09:00:00',
     closing_time: '21:00:00',
     created_at: '2026-10-01T00:00:00Z',
@@ -49,6 +50,7 @@ const MOCK_SHOPS: Shop[] = [
     latitude: 12.9352,
     longitude: 77.6245,
     status: 'pending',
+    is_queue_paused: false,
     opening_time: '10:00:00',
     closing_time: '22:00:00',
     created_at: '2026-10-21T00:00:00Z',
@@ -142,6 +144,7 @@ const MOCK_QUEUE_ENTRIES: QueueEntry[] = [
     completed_at: null,
     is_walkin: false,
     is_billable: false,
+    queue_date: '2026-10-22',
     created_at: '2026-10-22T09:00:00Z',
     updated_at: '2026-10-22T09:20:00Z'
   },
@@ -161,6 +164,7 @@ const MOCK_QUEUE_ENTRIES: QueueEntry[] = [
     completed_at: null,
     is_walkin: false,
     is_billable: false,
+    queue_date: '2026-10-22',
     created_at: '2026-10-22T09:10:00Z',
     updated_at: '2026-10-22T09:30:00Z'
   },
@@ -180,6 +184,7 @@ const MOCK_QUEUE_ENTRIES: QueueEntry[] = [
     completed_at: '2026-10-22T08:58:00Z',
     is_walkin: true,
     is_billable: false,
+    queue_date: '2026-10-22',
     created_at: '2026-10-22T08:30:00Z',
     updated_at: '2026-10-22T08:58:00Z'
   },
@@ -199,6 +204,7 @@ const MOCK_QUEUE_ENTRIES: QueueEntry[] = [
     completed_at: '2026-10-22T08:28:00Z',
     is_walkin: false,
     is_billable: true,
+    queue_date: '2026-10-22',
     created_at: '2026-10-22T07:45:00Z',
     updated_at: '2026-10-22T08:28:00Z'
   }
@@ -295,44 +301,38 @@ export default function AdminApp() {
     'shops' | 'accounts' | 'activity' | 'revenue' | 'fraud' | 'tickets' | 'settings' | 'logs'
   >('shops');
 
-  const [shops, setShops] = useState<Shop[]>(MOCK_SHOPS);
-  const [profiles, setProfiles] = useState<Profile[]>(MOCK_PROFILES);
-  const [services] = useState<Service[]>(MOCK_SERVICES);
-  const [queueEntries, setQueueEntries] = useState<QueueEntry[]>(MOCK_QUEUE_ENTRIES);
-  const [feeRecords, setFeeRecords] = useState<FeeRecord[]>(MOCK_FEE_RECORDS);
-  const [payments] = useState<Payment[]>(MOCK_PAYMENTS);
-  const [tickets, setTickets] = useState<SupportTicket[]>(MOCK_TICKETS);
-  const [logs, setLogs] = useState<AuditLog[]>(MOCK_AUDIT_LOGS);
+  const [shops, setShops] = useState<Shop[]>([]);
+  const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [services, setServices] = useState<Service[]>([]);
+  const [queueEntries, setQueueEntries] = useState<QueueEntry[]>([]);
+  const [feeRecords, setFeeRecords] = useState<FeeRecord[]>([]);
+  const [payments, setPayments] = useState<Payment[]>([]);
+  const [tickets, setTickets] = useState<SupportTicket[]>([]);
+  const [logs, setLogs] = useState<AuditLog[]>([]);
   const [realtimeConnected, setRealtimeConnected] = useState<boolean>(false);
+  const [isDemoMode, setIsDemoMode] = useState<boolean>(false);
 
   const supabase = getSupabaseClient();
 
-  // 1. Initial Auth Check
+  // 1. Initial Auth Check (Strict backend role verification)
   useEffect(() => {
     const checkInitialSession = async () => {
       try {
         const { data } = await supabase.auth.getSession();
         if (data.session?.user) {
-          const { data: profileData } = await supabase
+          const { data: profileData, error: profErr } = await supabase
             .from('profiles')
             .select('*')
             .eq('id', data.session.user.id)
             .single();
 
-          if (profileData && (profileData as unknown as Profile).role === 'admin') {
+          if (!profErr && profileData && (profileData as unknown as Profile).role === 'admin') {
             setCurrentUser(data.session.user);
             setCurrentProfile(profileData as unknown as Profile);
-          } else if (data.session.user.email === 'admin@quickcut.com') {
-            setCurrentUser(data.session.user);
-            setCurrentProfile({
-              id: data.session.user.id,
-              role: 'admin',
-              full_name: 'Super Administrator',
-              phone: '+91 99999 00000',
-              avatar_url: null,
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString()
-            });
+          } else {
+            // Not an admin: clear state
+            setCurrentUser(null);
+            setCurrentProfile(null);
           }
         }
       } catch (err) {
@@ -351,27 +351,56 @@ export default function AdminApp() {
       const [
         shopsRes,
         profilesRes,
+        servicesRes,
         queueRes,
         feesRes,
+        paymentsRes,
         ticketsRes,
         logsRes
       ] = await Promise.all([
         supabase.from('shops').select('*').order('created_at', { ascending: false }),
         supabase.from('profiles').select('*').order('created_at', { ascending: false }),
+        supabase.from('services').select('*').order('created_at', { ascending: false }),
         supabase.from('queue_entries').select('*').order('created_at', { ascending: false }).limit(200),
         supabase.from('fee_records').select('*').order('created_at', { ascending: false }),
+        supabase.from('payments').select('*').order('created_at', { ascending: false }),
         supabase.from('support_tickets').select('*').order('created_at', { ascending: false }),
         supabase.from('audit_logs').select('*').order('created_at', { ascending: false }).limit(200)
       ]);
 
-      if (shopsRes.data && shopsRes.data.length > 0) setShops(shopsRes.data as unknown as Shop[]);
-      if (profilesRes.data && profilesRes.data.length > 0) setProfiles(profilesRes.data as unknown as Profile[]);
-      if (queueRes.data && queueRes.data.length > 0) setQueueEntries(queueRes.data as unknown as QueueEntry[]);
-      if (feesRes.data && feesRes.data.length > 0) setFeeRecords(feesRes.data as unknown as FeeRecord[]);
-      if (ticketsRes.data && ticketsRes.data.length > 0) setTickets(ticketsRes.data as unknown as SupportTicket[]);
-      if (logsRes.data && logsRes.data.length > 0) setLogs(logsRes.data as unknown as AuditLog[]);
+      const liveShops = (shopsRes.data as unknown as Shop[]) || [];
+      const liveProfiles = (profilesRes.data as unknown as Profile[]) || [];
+      const liveServices = (servicesRes.data as unknown as Service[]) || [];
+      const liveQueue = (queueRes.data as unknown as QueueEntry[]) || [];
+      const liveFees = (feesRes.data as unknown as FeeRecord[]) || [];
+      const livePayments = (paymentsRes.data as unknown as Payment[]) || [];
+      const liveTickets = (ticketsRes.data as unknown as SupportTicket[]) || [];
+      const liveLogs = (logsRes.data as unknown as AuditLog[]) || [];
+
+      // If database has live data, display it; if completely unpopulated, allow previewing demonstration data
+      if (liveShops.length === 0 && liveProfiles.length === 0 && liveQueue.length === 0) {
+        setIsDemoMode(true);
+        setShops(MOCK_SHOPS);
+        setProfiles(MOCK_PROFILES);
+        setServices(MOCK_SERVICES);
+        setQueueEntries(MOCK_QUEUE_ENTRIES);
+        setFeeRecords(MOCK_FEE_RECORDS);
+        setPayments(MOCK_PAYMENTS);
+        setTickets(MOCK_TICKETS);
+        setLogs(MOCK_AUDIT_LOGS);
+      } else {
+        setIsDemoMode(false);
+        setShops(liveShops);
+        setProfiles(liveProfiles);
+        setServices(liveServices);
+        setQueueEntries(liveQueue);
+        setFeeRecords(liveFees);
+        setPayments(livePayments);
+        setTickets(liveTickets);
+        setLogs(liveLogs);
+      }
     } catch (err) {
-      console.warn('Supabase data load returned fallback:', err);
+      console.warn('Supabase data load error:', err);
     }
   }, [supabase]);
 
@@ -611,6 +640,57 @@ export default function AdminApp() {
           </button>
         </div>
       </header>
+
+      {/* Demonstration Data Banner (Phase 6 requirement) */}
+      {isDemoMode && (
+        <div
+          style={{
+            background: 'rgba(245, 158, 11, 0.12)',
+            borderBottom: '1px solid rgba(245, 158, 11, 0.3)',
+            padding: '10px 28px',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            color: '#FCD34D',
+            fontSize: 13,
+            fontWeight: 600,
+            flexWrap: 'wrap',
+            gap: 10
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span>⚠️</span>
+            <span>
+              <strong>Demonstration Data View:</strong> Database tables are currently empty or in dev mode. Displaying verified sample figures.
+            </span>
+          </div>
+          <button
+            onClick={() => {
+              setIsDemoMode(false);
+              setShops([]);
+              setProfiles([]);
+              setServices([]);
+              setQueueEntries([]);
+              setFeeRecords([]);
+              setPayments([]);
+              setTickets([]);
+              setLogs([]);
+            }}
+            style={{
+              background: 'rgba(245, 158, 11, 0.25)',
+              border: '1px solid rgba(245, 158, 11, 0.5)',
+              color: '#FFFFFF',
+              fontSize: 11,
+              fontWeight: 700,
+              padding: '5px 12px',
+              borderRadius: 6,
+              cursor: 'pointer'
+            }}
+          >
+            Switch to Live Empty DB
+          </button>
+        </div>
+      )}
 
       {/* Main Admin Workspace */}
       <main style={{ padding: '28px', maxWidth: 1280, margin: '0 auto', width: '100%', flex: 1 }}>

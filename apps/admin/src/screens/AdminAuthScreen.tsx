@@ -44,22 +44,8 @@ export default function AdminAuthScreen({ onLoginSuccess }: AdminAuthScreenProps
         .single();
 
       if (profileError || !profileData) {
-        // Fallback check: if email is admin@quickcut.com and profile is empty/missing
-        if (authData.user.email === 'admin@quickcut.com') {
-          const adminProfile: Profile = {
-            id: authData.user.id,
-            role: 'admin',
-            full_name: 'Super Administrator',
-            phone: '+91 99999 00000',
-            avatar_url: null,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
-          };
-          onLoginSuccess(authData.user, adminProfile);
-          return;
-        }
         await supabase.auth.signOut();
-        throw new Error('Unable to retrieve administrative profile.');
+        throw new Error('Unable to retrieve administrative profile. Access denied.');
       }
 
       const profile = profileData as unknown as Profile;
