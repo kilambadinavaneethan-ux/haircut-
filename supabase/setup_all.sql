@@ -1630,7 +1630,7 @@ BEGIN
     -- Validate token matches ticket or shop ID
     IF v_entry.qr_code_token::text != p_qr_token 
        AND v_entry.shop_id::text != p_qr_token 
-       AND String(v_entry.queue_number) != TRIM(p_qr_token)
+       AND v_entry.queue_number::text != TRIM(p_qr_token)
     THEN
         -- Allow partial token matching for staff scanner
         IF NOT (public.is_shop_staff(v_entry.shop_id) OR public.is_shop_owner(v_entry.shop_id)) THEN

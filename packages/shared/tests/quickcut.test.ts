@@ -389,22 +389,85 @@ test('QuickCut Test Suite - Core Business Rules, Security & Invariants', async (
     const promoted = updateProfileRole('customer', 'staff', 'admin');
     assert.strictEqual(promoted, 'staff');
 
-    // 7c. Shop approval authorization
-    function approveShop(shopId: string, callerRole: string) {
-      if (callerRole !== 'admin') {
-        throw new Error('Only administrators can approve shops.');
+    // 7c. Shop approval authorization & self-approval regression test
+    function insertShopRLS(ownerId: string, status: string, callerRole: string) {
+      // shops_insert_policy: admin OR (auth.uid() = owner_id AND status = 'pending')
+      if (callerRole === 'admin') return { ownerId, status, allowed: true };
+      if (status !== 'pending') {
+        throw new Error('Unauthorized: New shops can only be submitted in pending status.');
       }
-      return { shopId, status: 'approved' };
+      return { ownerId, status, allowed: true };
     }
 
-    // Owner attempts to self-approve shop -> rejected
+    function updateShopRLS(currentStatus: string, nextStatus: string, callerRole: string) {
+      // shops_update_policy: WITH CHECK requires status = current_status unless admin
+      if (callerRole === 'admin') return { status: nextStatus, allowed: true };
+      if (nextStatus !== currentStatus) {
+        throw new Error('Unauthorized: Shop owners cannot change shop approval status.');
+      }
+      return { status: nextStatus, allowed: true };
+    }
+
+    // Owner creates pending shop -> allowed
+    const pendingShop = insertShopRLS('owner-1', 'pending', 'customer');
+    assert.strictEqual(pendingShop.status, 'pending');
+
+    // Owner attempts to insert approved shop directly -> rejected
     assert.throws(() => {
-      approveShop('shop-1', 'owner');
-    }, /Only administrators can approve shops/);
+      insertShopRLS('owner-1', 'approved', 'customer');
+    }, /New shops can only be submitted in pending status/);
+
+    // Owner attempts to self-approve pending shop -> rejected
+    assert.throws(() => {
+      updateShopRLS('pending', 'approved', 'owner');
+    }, /Shop owners cannot change shop approval status/);
 
     // Admin approves shop -> allowed
-    const approved = approveShop('shop-1', 'admin');
-    assert.strictEqual(approved.status, 'approved');
+    const adminApproved = updateShopRLS('pending', 'approved', 'admin');
+    assert.strictEqual(adminApproved.status, 'approved');
+
+    // 7d. Cross-shop access policy
+    function canAccessQueueEntry(staffAssignments: Record<string, string[]>, staffUserId: string, shopId: string, callerRole: string) {
+      if (callerRole === 'admin') return true;
+      const assignedShops = staffAssignments[staffUserId] || [];
+      return assignedShops.includes(shopId);
+    }
+
+    const staffShops = { 'staff-1': ['shop-alpha'], 'staff-2': ['shop-beta'] };
+    assert.strictEqual(canAccessQueueEntry(staffShops, 'staff-1', 'shop-alpha', 'staff'), true, 'Staff can access assigned shop');
+    assert.strictEqual(canAccessQueueEntry(staffShops, 'staff-1', 'shop-beta', 'staff'), false, 'Staff cannot access unassigned shop');
+
+    // 7e. Direct payment insertion prevention
+    function insertPaymentRLS(callerRole: string, amount: number) {
+      // payments_insert_policy: strictly requires is_admin()
+      if (callerRole !== 'admin') {
+        throw new Error('Unauthorized: Only platform administrators can record payments.');
+      }
+      return { amount, allowed: true };
+    }
+
+    assert.throws(() => {
+      insertPaymentRLS('owner', 0.01);
+    }, /Only platform administrators can record payments/);
+    assert.strictEqual(insertPaymentRLS('admin', 500).allowed, true);
+
+    // 7f. Privileged function execution authorization
+    function executeAdminSetUserRole(callerRole: string, targetUserId: string, newRole: string) {
+      if (callerRole !== 'admin') {
+        throw new Error('Access denied: Super Admin privileges required.');
+      }
+      return { targetUserId, newRole, success: true };
+    }
+
+    assert.throws(() => {
+      executeAdminSetUserRole('customer', 'user-1', 'admin');
+    }, /Access denied: Super Admin privileges required/);
+
+    assert.throws(() => {
+      executeAdminSetUserRole('owner', 'user-1', 'staff');
+    }, /Access denied: Super Admin privileges required/);
+
+    assert.strictEqual(executeAdminSetUserRole('admin', 'user-1', 'staff').success, true);
   });
 
   // =========================================================================
