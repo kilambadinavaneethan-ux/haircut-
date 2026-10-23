@@ -822,29 +822,16 @@ $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 -- Security & Invariants Protection Triggers (Pre-seed definition)
 CREATE OR REPLACE FUNCTION public.fn_prevent_profile_role_escalation()
 RETURNS TRIGGER AS $$
-DECLARE
-    v_is_internal BOOLEAN;
-    v_is_db_admin BOOLEAN;
 BEGIN
-    -- Check if this change originates from a trusted internal trigger or admin RPC
-    v_is_internal := (current_setting('quickcut.internal_role_change', true) = 'true');
-
-    -- Check if running via SQL console, migrations, postgres superuser, or service_role
-    v_is_db_admin := (
-        auth.uid() IS NULL 
-        OR current_user IN ('postgres', 'supabase_admin', 'service_role')
-        OR (COALESCE(current_setting('request.jwt.claim.role', true), '') = 'service_role')
-    );
-
     IF TG_OP = 'INSERT' THEN
         -- Non-admins cannot insert any role other than customer
-        IF NEW.role != 'customer' AND NOT (v_is_internal OR v_is_db_admin OR public.is_admin()) THEN
+        IF NEW.role != 'customer' AND NOT (auth.uid() IS NULL OR public.is_admin()) THEN
             NEW.role := 'customer'::user_role;
         END IF;
     ELSIF TG_OP = 'UPDATE' THEN
-        -- If role is changing, only authorized callers or internal workflows can modify it
+        -- If role is changing, only a verified platform administrator or superuser can authorize it
         IF NEW.role IS DISTINCT FROM OLD.role THEN
-            IF NOT (v_is_internal OR v_is_db_admin OR public.is_admin()) THEN
+            IF NOT (auth.uid() IS NULL OR public.is_admin()) THEN
                 RAISE EXCEPTION 'Unauthorized: Only platform administrators can change account roles.';
             END IF;
         END IF;
@@ -865,10 +852,11 @@ CREATE OR REPLACE FUNCTION public.fn_handle_shop_status_change()
 RETURNS TRIGGER AS $$
 BEGIN
     IF NEW.status = 'approved' AND (OLD.status IS NULL OR OLD.status != 'approved') THEN
-        PERFORM set_config('quickcut.internal_role_change', 'true', true);
-        UPDATE public.profiles
-        SET role = 'owner'::user_role, updated_at = timezone('utc'::text, now())
-        WHERE id = NEW.owner_id AND role = 'customer';
+        IF auth.uid() IS NULL OR public.is_admin() THEN
+            UPDATE public.profiles
+            SET role = 'owner'::user_role, updated_at = timezone('utc'::text, now())
+            WHERE id = NEW.owner_id AND role = 'customer';
+        END IF;
     END IF;
     RETURN NEW;
 END;
@@ -880,22 +868,10 @@ AFTER UPDATE OF status ON public.shops
 FOR EACH ROW
 EXECUTE FUNCTION public.fn_handle_shop_status_change();
 
-CREATE OR REPLACE FUNCTION public.fn_handle_staff_assignment()
-RETURNS TRIGGER AS $$
-BEGIN
-    PERFORM set_config('quickcut.internal_role_change', 'true', true);
-    UPDATE public.profiles
-    SET role = 'staff'::user_role, updated_at = timezone('utc'::text, now())
-    WHERE id = NEW.user_id AND role = 'customer';
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
-
+-- Decouple staff assignment from mutating global profile role.
+-- Staff access is shop-scoped via public.shop_staff and public.is_shop_staff(shop_id).
 DROP TRIGGER IF EXISTS trg_handle_staff_assignment ON public.shop_staff;
-CREATE TRIGGER trg_handle_staff_assignment
-AFTER INSERT ON public.shop_staff
-FOR EACH ROW
-EXECUTE FUNCTION public.fn_handle_staff_assignment();
+DROP FUNCTION IF EXISTS public.fn_handle_staff_assignment();
 
 -- 1. Create Auth Users (Pre-registered test accounts with password: Password123!)
 -- Admin
@@ -1343,512 +1319,9 @@ WHERE status IN ('waiting', 'in_service');
 CREATE UNIQUE INDEX IF NOT EXISTS uq_shop_daily_queue_number 
 ON public.queue_entries (shop_id, queue_date, queue_number);
 
--- 5. Secure user profile creation on signup (Eliminate Privilege Escalation)
--- All new auth signups receive the 'customer' role strictly by default.
--- Elevated roles ('owner', 'staff', 'admin') cannot be self-assigned via user metadata.
-CREATE OR REPLACE FUNCTION public.handle_new_user()
-RETURNS TRIGGER AS $$
-DECLARE
-    v_name TEXT;
-BEGIN
-    v_name := COALESCE(
-        NEW.raw_user_meta_data->>'full_name', 
-        NEW.raw_user_meta_data->>'name', 
-        split_part(NEW.email, '@', 1)
-    );
-
-    INSERT INTO public.profiles (id, role, full_name, phone, avatar_url)
-    VALUES (
-        NEW.id,
-        'customer'::user_role, -- Strict default role
-        v_name,
-        NEW.raw_user_meta_data->>'phone',
-        NEW.raw_user_meta_data->>'avatar_url'
-    )
-    ON CONFLICT (id) DO UPDATE SET
-        full_name = COALESCE(EXCLUDED.full_name, public.profiles.full_name),
-        phone = COALESCE(EXCLUDED.phone, public.profiles.phone),
-        avatar_url = COALESCE(EXCLUDED.avatar_url, public.profiles.avatar_url),
-        updated_at = timezone('utc'::text, now());
-
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
-
--- Re-attach trigger
-DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
-CREATE TRIGGER on_auth_user_created
-AFTER INSERT ON auth.users
-FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
-
--- 6. Atomic Queue Number Allocation & Relational Integrity Validation Trigger
-CREATE OR REPLACE FUNCTION public.fn_assign_queue_number()
-RETURNS TRIGGER AS $$
-DECLARE
-    v_next_number INTEGER;
-    v_shop_status shop_status;
-    v_is_paused BOOLEAN;
-BEGIN
-    -- 6a. Verify shop exists, lock shop row for concurrent serialization, check status & paused flag
-    SELECT status, is_queue_paused
-    INTO v_shop_status, v_is_paused
-    FROM public.shops
-    WHERE id = NEW.shop_id
-    FOR UPDATE;
-
-    IF NOT FOUND THEN
-        RAISE EXCEPTION 'Target barber shop does not exist.';
-    END IF;
-
-    IF v_shop_status != 'approved' THEN
-        RAISE EXCEPTION 'Cannot join queue for unapproved or suspended shop.';
-    END IF;
-
-    -- If queue is paused, reject new non-walkin online join requests
-    IF v_is_paused AND NEW.is_walkin = false THEN
-        RAISE EXCEPTION 'This barber shop has temporarily paused incoming queue entries.';
-    END IF;
-
-    -- 6b. Verify service belongs to this shop and is active
-    IF NOT EXISTS (
-        SELECT 1 FROM public.services 
-        WHERE id = NEW.service_id AND shop_id = NEW.shop_id AND is_active = true
-    ) THEN
-        RAISE EXCEPTION 'Selected service does not belong to this shop or is inactive.';
-    END IF;
-
-    -- 6c. If barber is specified, verify barber belongs to this shop and is active
-    IF NEW.barber_id IS NOT NULL AND NOT EXISTS (
-        SELECT 1 FROM public.barbers 
-        WHERE id = NEW.barber_id AND shop_id = NEW.shop_id AND is_active = true
-    ) THEN
-        RAISE EXCEPTION 'Selected barber does not belong to this shop or is inactive.';
-    END IF;
-
-    -- Set queue_date
-    NEW.queue_date := COALESCE(NEW.queue_date, timezone('utc'::text, now())::DATE);
-
-    -- 6d. Atomic queue number generation under shop row lock
-    IF NEW.queue_number IS NULL OR NEW.queue_number = 0 THEN
-        SELECT COALESCE(MAX(queue_number), 0) + 1
-        INTO v_next_number
-        FROM public.queue_entries
-        WHERE shop_id = NEW.shop_id
-          AND queue_date = NEW.queue_date;
-
-        NEW.queue_number := v_next_number;
-    END IF;
-
-    -- Ensure initial state
-    NEW.status := 'waiting';
-    NEW.created_at := COALESCE(NEW.created_at, timezone('utc'::text, now()));
-    NEW.updated_at := timezone('utc'::text, now());
-
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
-
-DROP TRIGGER IF EXISTS trg_assign_queue_number ON public.queue_entries;
-CREATE TRIGGER trg_assign_queue_number
-BEFORE INSERT ON public.queue_entries
-FOR EACH ROW
-EXECUTE FUNCTION public.fn_assign_queue_number();
-
--- 7. Queue Entry State Machine, Transitions & Billing Invariants Protection
-CREATE OR REPLACE FUNCTION public.fn_protect_queue_entry_updates()
-RETURNS TRIGGER AS $$
-DECLARE
-    v_is_admin BOOLEAN;
-    v_is_staff BOOLEAN;
-    v_is_owner BOOLEAN;
-BEGIN
-    v_is_admin := public.is_admin();
-    v_is_staff := public.is_shop_staff(OLD.shop_id);
-    v_is_owner := public.is_shop_owner(OLD.shop_id);
-
-    -- 7a. Enforce terminal state immutability
-    IF OLD.status IN ('completed', 'cancelled', 'no_show') AND NEW.status != OLD.status THEN
-        IF NOT v_is_admin THEN
-            RAISE EXCEPTION 'Ticket #% is in terminal state "%" and cannot be modified.', OLD.queue_number, OLD.status;
-        END IF;
-    END IF;
-
-    -- 7b. If customer is updating their own entry
-    IF auth.uid() = OLD.customer_id AND NOT (v_is_admin OR v_is_staff OR v_is_owner) THEN
-        -- Customer can ONLY cancel their waiting ticket
-        IF NEW.status != OLD.status THEN
-            IF NOT (OLD.status = 'waiting' AND NEW.status = 'cancelled') THEN
-                RAISE EXCEPTION 'Customers can only cancel a waiting queue ticket.';
-            END IF;
-        END IF;
-
-        -- Customer cannot modify protected fields
-        NEW.queue_number := OLD.queue_number;
-        NEW.shop_id := OLD.shop_id;
-        NEW.service_id := OLD.service_id;
-        NEW.barber_id := OLD.barber_id;
-        NEW.is_walkin := OLD.is_walkin;
-        NEW.is_billable := OLD.is_billable;
-        NEW.completed_at := OLD.completed_at;
-        NEW.called_at := OLD.called_at;
-        NEW.checked_in_at := OLD.checked_in_at;
-        NEW.qr_code_token := OLD.qr_code_token;
-    END IF;
-
-    -- 7c. Transition timestamps
-    IF NEW.status = 'in_service' AND OLD.status != 'in_service' AND NEW.called_at IS NULL THEN
-        NEW.called_at := timezone('utc'::text, now());
-    END IF;
-
-    IF NEW.status = 'completed' AND OLD.status != 'completed' AND NEW.completed_at IS NULL THEN
-        NEW.completed_at := timezone('utc'::text, now());
-    END IF;
-
-    -- 7d. Core Billing Invariant:
-    -- Billable ONLY IF:
-    -- 1. status = 'completed'
-    -- 2. checked_in_at IS NOT NULL (Customer QR verified)
-    -- 3. completed_at IS NOT NULL
-    -- 4. is_walkin = false
-    IF NEW.status = 'completed'
-       AND NEW.checked_in_at IS NOT NULL
-       AND NEW.completed_at IS NOT NULL
-       AND NEW.is_walkin = false
-    THEN
-        NEW.is_billable := true;
-    ELSE
-        NEW.is_billable := false;
-    END IF;
-
-    NEW.updated_at := timezone('utc'::text, now());
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
-
-DROP TRIGGER IF EXISTS trg_compute_queue_entry_billable ON public.queue_entries;
-DROP TRIGGER IF EXISTS trg_protect_queue_entry_updates ON public.queue_entries;
-CREATE TRIGGER trg_protect_queue_entry_updates
-BEFORE UPDATE ON public.queue_entries
-FOR EACH ROW
-EXECUTE FUNCTION public.fn_protect_queue_entry_updates();
-
--- 8. Atomic Service Start RPC (Server-side chair concurrency protection)
-CREATE OR REPLACE FUNCTION public.start_service_atomic(
-    p_entry_id UUID,
-    p_barber_id UUID DEFAULT NULL
-)
-RETURNS JSONB AS $$
-DECLARE
-    v_entry public.queue_entries%ROWTYPE;
-    v_shop_id UUID;
-    v_existing_active_count INTEGER;
-BEGIN
-    -- Fetch and lock the target entry
-    SELECT * INTO v_entry
-    FROM public.queue_entries
-    WHERE id = p_entry_id
-    FOR UPDATE;
-
-    IF NOT FOUND THEN
-        RAISE EXCEPTION 'Queue entry not found.';
-    END IF;
-
-    v_shop_id := v_entry.shop_id;
-
-    -- Verify caller authorization
-    IF NOT (public.is_admin() OR public.is_shop_staff(v_shop_id) OR public.is_shop_owner(v_shop_id)) THEN
-        RAISE EXCEPTION 'Unauthorized to start service for this shop.';
-    END IF;
-
-    IF v_entry.status != 'waiting' THEN
-        RAISE EXCEPTION 'Cannot start service: Ticket #% is already "%".', v_entry.queue_number, v_entry.status;
-    END IF;
-
-    -- Check if another service is in chair for this shop
-    -- (If barber specified, check for this barber; otherwise check shop-wide active chair)
-    IF p_barber_id IS NOT NULL THEN
-        SELECT COUNT(*) INTO v_existing_active_count
-        FROM public.queue_entries
-        WHERE shop_id = v_shop_id
-          AND barber_id = p_barber_id
-          AND status = 'in_service';
-        
-        IF v_existing_active_count > 0 THEN
-            RAISE EXCEPTION 'This barber already has an active client in service.';
-        END IF;
-    END IF;
-
-    -- Transition entry
-    UPDATE public.queue_entries
-    SET status = 'in_service',
-        called_at = timezone('utc'::text, now()),
-        barber_id = COALESCE(p_barber_id, barber_id),
-        updated_at = timezone('utc'::text, now())
-    WHERE id = p_entry_id;
-
-    RETURN jsonb_build_object(
-        'success', true,
-        'entry_id', p_entry_id,
-        'status', 'in_service',
-        'queue_number', v_entry.queue_number
-    );
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
-
--- 9. Secure QR Check-in RPC
-CREATE OR REPLACE FUNCTION public.verify_qr_checkin(
-    p_entry_id UUID,
-    p_qr_token TEXT
-)
-RETURNS JSONB AS $$
-DECLARE
-    v_entry public.queue_entries%ROWTYPE;
-BEGIN
-    SELECT * INTO v_entry
-    FROM public.queue_entries
-    WHERE id = p_entry_id
-    FOR UPDATE;
-
-    IF NOT FOUND THEN
-        RAISE EXCEPTION 'Queue entry ticket not found.';
-    END IF;
-
-    -- Verify caller is staff, owner, admin, or the ticket owner
-    IF NOT (
-        public.is_admin() 
-        OR public.is_shop_staff(v_entry.shop_id) 
-        OR public.is_shop_owner(v_entry.shop_id) 
-        OR (auth.uid() = v_entry.customer_id)
-    ) THEN
-        RAISE EXCEPTION 'Unauthorized to check in this ticket.';
-    END IF;
-
-    IF v_entry.status != 'waiting' THEN
-        RAISE EXCEPTION 'Ticket #% cannot be checked in because its status is "%".', v_entry.queue_number, v_entry.status;
-    END IF;
-
-    -- Validate token matches ticket or shop ID
-    IF v_entry.qr_code_token::text != p_qr_token 
-       AND v_entry.shop_id::text != p_qr_token 
-       AND v_entry.queue_number::text != TRIM(p_qr_token)
-    THEN
-        -- Allow partial token matching for staff scanner
-        IF NOT (public.is_shop_staff(v_entry.shop_id) OR public.is_shop_owner(v_entry.shop_id)) THEN
-            RAISE EXCEPTION 'Invalid check-in QR code.';
-        END IF;
-    END IF;
-
-    UPDATE public.queue_entries
-    SET checked_in_at = timezone('utc'::text, now()),
-        updated_at = timezone('utc'::text, now())
-    WHERE id = p_entry_id;
-
-    RETURN jsonb_build_object(
-        'success', true,
-        'entry_id', p_entry_id,
-        'queue_number', v_entry.queue_number,
-        'checked_in_at', timezone('utc'::text, now())
-    );
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
-
--- 10. Secure Fee Payment Settlement RPC (Atomic server-side verification)
-CREATE OR REPLACE FUNCTION public.process_fee_payment(
-    p_fee_record_id UUID,
-    p_payment_method TEXT DEFAULT 'UPI',
-    p_transaction_ref TEXT DEFAULT NULL
-)
-RETURNS JSONB AS $$
-DECLARE
-    v_record public.fee_records%ROWTYPE;
-    v_payment_id UUID;
-    v_ref TEXT;
-BEGIN
-    SELECT * INTO v_record
-    FROM public.fee_records
-    WHERE id = p_fee_record_id
-    FOR UPDATE;
-
-    IF NOT FOUND THEN
-        RAISE EXCEPTION 'Fee invoice record not found.';
-    END IF;
-
-    -- Verify caller is shop owner or admin
-    IF NOT (public.is_admin() OR public.is_shop_owner(v_record.shop_id)) THEN
-        RAISE EXCEPTION 'Unauthorized to settle fees for this shop.';
-    END IF;
-
-    IF v_record.status = 'paid' THEN
-        RETURN jsonb_build_object(
-            'success', true,
-            'status', 'already_paid',
-            'amount', v_record.amount
-        );
-    END IF;
-
-    v_ref := COALESCE(
-        p_transaction_ref, 
-        'UPI/' || to_char(now(), 'YYYYMMDD') || '/' || floor(10000000 + random() * 90000000)::text
-    );
-
-    -- 1. Insert verified payment record
-    INSERT INTO public.payments (
-        fee_record_id,
-        shop_id,
-        amount,
-        currency,
-        status,
-        payment_method,
-        transaction_ref,
-        paid_at
-    )
-    VALUES (
-        v_record.id,
-        v_record.shop_id,
-        v_record.amount,
-        'INR',
-        'completed',
-        COALESCE(p_payment_method, 'UPI'),
-        v_ref,
-        timezone('utc'::text, now())
-    )
-    RETURNING id INTO v_payment_id;
-
-    -- 2. Mark fee record as paid
-    UPDATE public.fee_records
-    SET status = 'paid',
-        updated_at = timezone('utc'::text, now())
-    WHERE id = v_record.id;
-
-    -- 3. Audit log the settlement
-    INSERT INTO public.audit_logs (
-        user_id,
-        action,
-        entity_type,
-        entity_id,
-        payload
-    )
-    VALUES (
-        auth.uid(),
-        'FEE_INVOICE_PAID',
-        'fee_records',
-        v_record.id::text,
-        jsonb_build_object(
-            'shop_id', v_record.shop_id,
-            'month', v_record.month,
-            'amount', v_record.amount,
-            'billable_count', v_record.billable_count,
-            'payment_id', v_payment_id,
-            'transaction_ref', v_ref
-        )
-    );
-
-    RETURN jsonb_build_object(
-        'success', true,
-        'payment_id', v_payment_id,
-        'fee_record_id', v_record.id,
-        'status', 'paid',
-        'amount', v_record.amount,
-        'transaction_ref', v_ref
-    );
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
-
--- 11. Repeatable Monthly Fee Aggregator (Preserves paid balances)
-CREATE OR REPLACE FUNCTION public.generate_monthly_fee_record(p_shop_id UUID, p_month TEXT)
-RETURNS UUID AS $$
-DECLARE
-    v_billable_count INTEGER := 0;
-    v_rate NUMERIC(10, 2) := 5.00;
-    v_amount NUMERIC(10, 2) := 0.00;
-    v_disputed_until TIMESTAMPTZ;
-    v_existing public.fee_records%ROWTYPE;
-    v_record_id UUID;
-BEGIN
-    -- If already paid, do not corrupt or reset paid balance
-    SELECT * INTO v_existing
-    FROM public.fee_records
-    WHERE shop_id = p_shop_id AND month = p_month;
-
-    IF FOUND AND v_existing.status = 'paid' THEN
-        RETURN v_existing.id;
-    END IF;
-
-    -- Find billable queue entries completed within that month
-    SELECT COUNT(*)
-    INTO v_billable_count
-    FROM public.queue_entries
-    WHERE shop_id = p_shop_id
-      AND is_billable = true
-      AND to_char(completed_at, 'YYYY-MM') = p_month;
-
-    v_amount := v_billable_count * v_rate;
-    v_disputed_until := timezone('utc'::text, now()) + INTERVAL '7 days';
-
-    INSERT INTO public.fee_records (
-        shop_id,
-        month,
-        billable_count,
-        rate_per_service,
-        amount,
-        status,
-        disputed_until
-    )
-    VALUES (
-        p_shop_id,
-        p_month,
-        v_billable_count,
-        v_rate,
-        v_amount,
-        'pending',
-        v_disputed_until
-    )
-    ON CONFLICT (shop_id, month) DO UPDATE
-    SET billable_count = EXCLUDED.billable_count,
-        amount = EXCLUDED.amount,
-        updated_at = timezone('utc'::text, now())
-    WHERE public.fee_records.status != 'paid'
-    RETURNING id INTO v_record_id;
-
-    RETURN v_record_id;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
-
--- 12. Update Queue Entries RLS Policies
--- Allow customers to view active queue status so live position & wait times can be computed
-DROP POLICY IF EXISTS "queue_entries_select_policy" ON public.queue_entries;
-CREATE POLICY "queue_entries_select_policy" ON public.queue_entries
-FOR SELECT USING (
-    public.is_admin()
-    OR public.is_shop_owner(shop_id)
-    OR public.is_shop_staff(shop_id)
-    OR customer_id = auth.uid()
-    OR (
-        -- Allow public queue board visibility of active entries in approved shops
-        status IN ('waiting', 'in_service')
-        AND EXISTS (SELECT 1 FROM public.shops s WHERE s.id = queue_entries.shop_id AND s.status = 'approved')
-    )
-);
-
--- Allow staff and owners to update shops (e.g. pause/resume queue)
-DROP POLICY IF EXISTS "shops_update_policy" ON public.shops;
-CREATE POLICY "shops_update_policy" ON public.shops
-FOR UPDATE USING (
-    public.is_admin() OR owner_id = auth.uid() OR public.is_shop_staff(id)
-) WITH CHECK (
-    public.is_admin()
-    OR (
-        owner_id = auth.uid()
-        -- Regular owners cannot unilaterally approve their own shop
-        AND (status = (SELECT s.status FROM public.shops s WHERE s.id = shops.id))
-    )
-    OR (
-        public.is_shop_staff(id)
-        -- Staff can only toggle operational fields like is_queue_paused
-        AND (status = (SELECT s.status FROM public.shops s WHERE s.id = shops.id))
-        AND (owner_id = (SELECT s.owner_id FROM public.shops s WHERE s.id = shops.id))
-    )
-);
+-- Note: All business functions, triggers, and RLS policies originally drafted in
+-- 20261023000001 are modularized, hardened, and authoritatively defined in the
+-- dedicated Stage B, Stage C, and Stage D sections below.
 
 -- ==========================================================================
 -- SECTION: AUTHENTICATION, ROLES, RLS & FUNCTION PERMISSIONS (MIGRATION 20261023000002)
@@ -1861,38 +1334,58 @@ FOR UPDATE USING (
 ALTER TABLE public.shops 
 ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL DEFAULT 'Asia/Kolkata';
 
--- 2. Hardened Helper Security Functions (Safe search_path)
+-- 2. Hardened Helper Security Functions (PL/pgSQL to prevent RLS inlining recursion, safe search_path)
 CREATE OR REPLACE FUNCTION public.current_user_role()
 RETURNS user_role AS $$
-    SELECT COALESCE(
-        (SELECT role FROM public.profiles WHERE id = auth.uid()),
-        'customer'::user_role
-    );
-$$ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp;
+DECLARE
+    v_role user_role := 'customer';
+BEGIN
+    SELECT role INTO v_role
+    FROM public.profiles
+    WHERE id = auth.uid();
+    
+    RETURN COALESCE(v_role, 'customer'::user_role);
+END;
+$$ LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp;
 
 CREATE OR REPLACE FUNCTION public.is_admin()
 RETURNS BOOLEAN AS $$
+DECLARE
+    v_is_admin BOOLEAN := false;
+BEGIN
     SELECT EXISTS (
         SELECT 1 FROM public.profiles
         WHERE id = auth.uid() AND role = 'admin'
-    );
-$$ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp;
+    ) INTO v_is_admin;
+    RETURN v_is_admin;
+END;
+$$ LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp;
 
 CREATE OR REPLACE FUNCTION public.is_shop_owner(target_shop_id UUID)
 RETURNS BOOLEAN AS $$
+DECLARE
+    v_is_owner BOOLEAN := false;
+BEGIN
     SELECT EXISTS (
         SELECT 1 FROM public.shops
         WHERE id = target_shop_id AND owner_id = auth.uid()
-    );
-$$ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp;
+    ) INTO v_is_owner;
+    RETURN v_is_owner;
+END;
+$$ LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp;
 
 CREATE OR REPLACE FUNCTION public.is_shop_staff(target_shop_id UUID)
 RETURNS BOOLEAN AS $$
+DECLARE
+    v_is_staff BOOLEAN := false;
+BEGIN
     SELECT EXISTS (
         SELECT 1 FROM public.shop_staff
         WHERE shop_id = target_shop_id AND user_id = auth.uid()
-    );
-$$ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp;
+    ) INTO v_is_staff;
+    RETURN v_is_staff;
+END;
+$$ LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp;
 
 -- 3. Hardened Automatic User Profile Creation on Signup (Prevent Self-Assigned Roles)
 -- Public signups receive 'customer' role strictly. User metadata can NEVER grant privileged roles.
@@ -1931,32 +1424,24 @@ CREATE TRIGGER on_auth_user_created
 AFTER INSERT ON auth.users
 FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
 
--- 4. Trigger to Prevent Unauthorized Direct Role Changes on Profiles Table
+-- 4. Column-Level Permission Hardening on Profiles
+-- Prevent non-superusers from updating the 'role' column directly via PostgREST/client queries
+REVOKE UPDATE (role) ON public.profiles FROM authenticated, anon, PUBLIC;
+GRANT SELECT, INSERT, UPDATE (full_name, phone, avatar_url, updated_at) ON public.profiles TO authenticated;
+
+-- 5. Trigger to Prevent Unauthorized Direct Role Changes on Profiles Table (Defense-in-depth)
 CREATE OR REPLACE FUNCTION public.fn_prevent_profile_role_escalation()
 RETURNS TRIGGER AS $$
-DECLARE
-    v_is_internal BOOLEAN;
-    v_is_db_admin BOOLEAN;
 BEGIN
-    -- Check if this change originates from a trusted internal trigger or admin RPC
-    v_is_internal := (current_setting('quickcut.internal_role_change', true) = 'true');
-
-    -- Check if running via SQL console, migrations, postgres superuser, or service_role
-    v_is_db_admin := (
-        auth.uid() IS NULL 
-        OR current_user IN ('postgres', 'supabase_admin', 'service_role')
-        OR (COALESCE(current_setting('request.jwt.claim.role', true), '') = 'service_role')
-    );
-
     IF TG_OP = 'INSERT' THEN
         -- Non-admins cannot insert any role other than customer
-        IF NEW.role != 'customer' AND NOT (v_is_internal OR v_is_db_admin OR public.is_admin()) THEN
+        IF NEW.role != 'customer' AND NOT (auth.uid() IS NULL OR public.is_admin()) THEN
             NEW.role := 'customer'::user_role;
         END IF;
     ELSIF TG_OP = 'UPDATE' THEN
-        -- If role is changing, only authorized callers or internal workflows can modify it
+        -- If role is changing, only a verified platform administrator or superuser can authorize it
         IF NEW.role IS DISTINCT FROM OLD.role THEN
-            IF NOT (v_is_internal OR v_is_db_admin OR public.is_admin()) THEN
+            IF NOT (auth.uid() IS NULL OR public.is_admin()) THEN
                 RAISE EXCEPTION 'Unauthorized: Only platform administrators can change account roles.';
             END IF;
         END IF;
@@ -1973,16 +1458,17 @@ BEFORE INSERT OR UPDATE ON public.profiles
 FOR EACH ROW
 EXECUTE FUNCTION public.fn_prevent_profile_role_escalation();
 
--- 5. Automatic Role Promotion on Shop Approval & Staff Assignment
--- 5a. When admin approves a shop, promote owner profile to 'owner' role
+-- 6. Automatic Owner Role Elevation upon Admin Shop Approval
 CREATE OR REPLACE FUNCTION public.fn_handle_shop_status_change()
 RETURNS TRIGGER AS $$
 BEGIN
+    -- When admin approves a shop, elevate owner profile to 'owner' role
     IF NEW.status = 'approved' AND (OLD.status IS NULL OR OLD.status != 'approved') THEN
-        PERFORM set_config('quickcut.internal_role_change', 'true', true);
-        UPDATE public.profiles
-        SET role = 'owner'::user_role, updated_at = timezone('utc'::text, now())
-        WHERE id = NEW.owner_id AND role = 'customer';
+        IF auth.uid() IS NULL OR public.is_admin() THEN
+            UPDATE public.profiles
+            SET role = 'owner'::user_role, updated_at = timezone('utc'::text, now())
+            WHERE id = NEW.owner_id AND role = 'customer';
+        END IF;
     END IF;
     RETURN NEW;
 END;
@@ -1994,25 +1480,13 @@ AFTER UPDATE OF status ON public.shops
 FOR EACH ROW
 EXECUTE FUNCTION public.fn_handle_shop_status_change();
 
--- 5b. When a shop owner links staff, promote staff profile to 'staff' role
-CREATE OR REPLACE FUNCTION public.fn_handle_staff_assignment()
-RETURNS TRIGGER AS $$
-BEGIN
-    PERFORM set_config('quickcut.internal_role_change', 'true', true);
-    UPDATE public.profiles
-    SET role = 'staff'::user_role, updated_at = timezone('utc'::text, now())
-    WHERE id = NEW.user_id AND role = 'customer';
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
-
+-- 7. Drop Deprecated Staff Global Role Mutation Trigger
+-- Staff access is shop-scoped via public.shop_staff rows and public.is_shop_staff(shop_id).
+-- Decouple staff membership from mutating global profile roles to eliminate cross-shop pollution.
 DROP TRIGGER IF EXISTS trg_handle_staff_assignment ON public.shop_staff;
-CREATE TRIGGER trg_handle_staff_assignment
-AFTER INSERT ON public.shop_staff
-FOR EACH ROW
-EXECUTE FUNCTION public.fn_handle_staff_assignment();
+DROP FUNCTION IF EXISTS public.fn_handle_staff_assignment();
 
--- 6. Super Admin RPC for Privileged User Role Updates
+-- 8. Super Admin RPC for Privileged User Role Updates
 CREATE OR REPLACE FUNCTION public.admin_set_user_role(
     p_user_id UUID,
     p_new_role user_role
@@ -2021,7 +1495,7 @@ RETURNS JSONB AS $$
 DECLARE
     v_old_role user_role;
 BEGIN
-    IF NOT public.is_admin() THEN
+    IF NOT (auth.uid() IS NULL OR public.is_admin()) THEN
         RAISE EXCEPTION 'Access denied: Super Admin privileges required.';
     END IF;
 
@@ -2029,8 +1503,6 @@ BEGIN
     IF NOT FOUND THEN
         RAISE EXCEPTION 'User profile not found.';
     END IF;
-
-    PERFORM set_config('quickcut.internal_role_change', 'true', true);
 
     UPDATE public.profiles
     SET role = p_new_role, updated_at = timezone('utc'::text, now())
@@ -2122,7 +1594,42 @@ FOR UPDATE USING (
     )
 );
 
--- 7c. Queue Entries Policies
+-- 7c. Shop Staff Policies (Strict Shop-Scoped Membership)
+DROP POLICY IF EXISTS "shop_staff_select_policy" ON public.shop_staff;
+CREATE POLICY "shop_staff_select_policy" ON public.shop_staff
+FOR SELECT USING (
+    public.is_admin()
+    OR public.is_shop_owner(shop_id)
+    OR user_id = auth.uid()
+    OR public.is_shop_staff(shop_id)
+);
+
+DROP POLICY IF EXISTS "shop_staff_insert_policy" ON public.shop_staff;
+CREATE POLICY "shop_staff_insert_policy" ON public.shop_staff
+FOR INSERT WITH CHECK (
+    -- Only an admin or the verified owner of an approved shop can assign staff
+    public.is_admin()
+    OR (
+        public.is_shop_owner(shop_id)
+        AND EXISTS (SELECT 1 FROM public.shops s WHERE s.id = shop_staff.shop_id AND s.status = 'approved')
+    )
+);
+
+DROP POLICY IF EXISTS "shop_staff_update_policy" ON public.shop_staff;
+CREATE POLICY "shop_staff_update_policy" ON public.shop_staff
+FOR UPDATE USING (
+    public.is_admin() OR public.is_shop_owner(shop_id)
+) WITH CHECK (
+    public.is_admin() OR public.is_shop_owner(shop_id)
+);
+
+DROP POLICY IF EXISTS "shop_staff_delete_policy" ON public.shop_staff;
+CREATE POLICY "shop_staff_delete_policy" ON public.shop_staff
+FOR DELETE USING (
+    public.is_admin() OR public.is_shop_owner(shop_id)
+);
+
+-- 7d. Queue Entries Policies
 -- Customer can ONLY insert for themselves in approved shops
 DROP POLICY IF EXISTS "queue_entries_insert_policy" ON public.queue_entries;
 CREATE POLICY "queue_entries_insert_policy" ON public.queue_entries
@@ -2159,7 +1666,7 @@ FOR DELETE USING (
     public.is_admin()
 );
 
--- 8. Restrict Function Permissions (Least Privilege)
+-- 8. Restrict Privileged Function Permissions (Least Privilege)
 REVOKE ALL ON FUNCTION public.admin_set_user_role(UUID, user_role) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.admin_set_user_role(UUID, user_role) TO authenticated, service_role;
 
@@ -2174,6 +1681,11 @@ GRANT EXECUTE ON FUNCTION public.is_shop_staff(UUID) TO authenticated, service_r
 
 REVOKE ALL ON FUNCTION public.current_user_role() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.current_user_role() TO anon, authenticated, service_role;
+
+-- Revoke direct execution of internal trigger functions from PUBLIC and anon
+REVOKE ALL ON FUNCTION public.handle_new_user() FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.fn_prevent_profile_role_escalation() FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.fn_handle_shop_status_change() FROM PUBLIC, anon;
 
 -- ==========================================================================
 -- SECTION: ATOMIC QUEUE NUMBERING, QR CHECK-IN & TRANSITIONS (MIGRATION 20261023000003)

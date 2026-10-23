@@ -427,15 +427,53 @@ test('QuickCut Test Suite - Core Business Rules, Security & Invariants', async (
     assert.strictEqual(adminApproved.status, 'approved');
 
     // 7d. Cross-shop access policy
+    // 7d. Staff Lifecycle & Cross-Shop Isolation Policy
+    function assignStaffRLS(callerId: string, shopOwnerId: string, shopStatus: string, callerRole: string) {
+      if (callerRole === 'admin') return { allowed: true };
+      if (callerId !== shopOwnerId) {
+        throw new Error('Unauthorized: Only the shop owner can assign staff.');
+      }
+      if (shopStatus !== 'approved') {
+        throw new Error('Unauthorized: Cannot assign staff to pending or unapproved shop.');
+      }
+      return { allowed: true };
+    }
+
+    // Owner assigns staff to approved shop -> allowed
+    assert.strictEqual(assignStaffRLS('owner-1', 'owner-1', 'approved', 'owner').allowed, true);
+
+    // Non-owner attempts to assign staff -> rejected
+    assert.throws(() => {
+      assignStaffRLS('attacker', 'owner-1', 'approved', 'customer');
+    }, /Only the shop owner can assign staff/);
+
+    // Owner attempts to assign staff to pending shop -> rejected
+    assert.throws(() => {
+      assignStaffRLS('owner-1', 'owner-1', 'pending', 'customer');
+    }, /Cannot assign staff to pending or unapproved shop/);
+
     function canAccessQueueEntry(staffAssignments: Record<string, string[]>, staffUserId: string, shopId: string, callerRole: string) {
       if (callerRole === 'admin') return true;
       const assignedShops = staffAssignments[staffUserId] || [];
       return assignedShops.includes(shopId);
     }
 
-    const staffShops = { 'staff-1': ['shop-alpha'], 'staff-2': ['shop-beta'] };
-    assert.strictEqual(canAccessQueueEntry(staffShops, 'staff-1', 'shop-alpha', 'staff'), true, 'Staff can access assigned shop');
-    assert.strictEqual(canAccessQueueEntry(staffShops, 'staff-1', 'shop-beta', 'staff'), false, 'Staff cannot access unassigned shop');
+    // Multi-shop staff assignment and removal simulation
+    const staffShops: Record<string, string[]> = {
+      'staff-1': ['shop-alpha', 'shop-beta'],
+      'staff-2': ['shop-beta']
+    };
+
+    // Staff-1 has access to both alpha and beta, but not gamma
+    assert.strictEqual(canAccessQueueEntry(staffShops, 'staff-1', 'shop-alpha', 'staff'), true, 'Staff can access assigned shop alpha');
+    assert.strictEqual(canAccessQueueEntry(staffShops, 'staff-1', 'shop-beta', 'staff'), true, 'Staff can access assigned shop beta');
+    assert.strictEqual(canAccessQueueEntry(staffShops, 'staff-1', 'shop-gamma', 'staff'), false, 'Staff cannot access unassigned shop gamma');
+
+    // Remove staff-1 from shop-alpha
+    staffShops['staff-1'] = staffShops['staff-1'].filter(s => s !== 'shop-alpha');
+    assert.strictEqual(canAccessQueueEntry(staffShops, 'staff-1', 'shop-alpha', 'staff'), false, 'Access to shop alpha immediately revoked after removal');
+    assert.strictEqual(canAccessQueueEntry(staffShops, 'staff-1', 'shop-beta', 'staff'), true, 'Access to shop beta preserved independently');
+
 
     // 7e. Direct payment insertion prevention
     function insertPaymentRLS(callerRole: string, amount: number) {
