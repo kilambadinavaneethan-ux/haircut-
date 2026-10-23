@@ -1425,9 +1425,12 @@ AFTER INSERT ON auth.users
 FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
 
 -- 4. Column-Level Permission Hardening on Profiles
--- Prevent non-superusers from updating the 'role' column directly via PostgREST/client queries
+-- Explicitly revoke table-level UPDATE from public, anon, and authenticated so column-level restrictions cannot be bypassed
+REVOKE UPDATE ON public.profiles FROM authenticated, anon, PUBLIC;
 REVOKE UPDATE (role) ON public.profiles FROM authenticated, anon, PUBLIC;
-GRANT SELECT, INSERT, UPDATE (full_name, phone, avatar_url, updated_at) ON public.profiles TO authenticated;
+REVOKE ALL ON public.profiles FROM anon;
+GRANT SELECT, INSERT ON public.profiles TO authenticated;
+GRANT UPDATE (full_name, phone, avatar_url, updated_at) ON public.profiles TO authenticated;
 
 -- 5. Trigger to Prevent Unauthorized Direct Role Changes on Profiles Table (Defense-in-depth)
 CREATE OR REPLACE FUNCTION public.fn_prevent_profile_role_escalation()
@@ -1458,7 +1461,26 @@ BEFORE INSERT OR UPDATE ON public.profiles
 FOR EACH ROW
 EXECUTE FUNCTION public.fn_prevent_profile_role_escalation();
 
--- 6. Automatic Owner Role Elevation upon Admin Shop Approval
+-- 6. Shop Approval and Critical Field Protection Triggers
+CREATE OR REPLACE FUNCTION public.fn_protect_shop_updates()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- Prevent non-admins from changing shop status (approval/suspension) or owner_id
+    IF (OLD.status IS DISTINCT FROM NEW.status) OR (OLD.owner_id IS DISTINCT FROM NEW.owner_id) THEN
+        IF NOT public.is_admin() THEN
+            RAISE EXCEPTION 'Unauthorized: Only platform administrators can change shop approval status or ownership.';
+        END IF;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
+
+DROP TRIGGER IF EXISTS trg_protect_shop_critical_fields ON public.shops;
+CREATE TRIGGER trg_protect_shop_critical_fields
+BEFORE UPDATE ON public.shops
+FOR EACH ROW
+EXECUTE FUNCTION public.fn_protect_shop_updates();
+
 CREATE OR REPLACE FUNCTION public.fn_handle_shop_status_change()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -1539,7 +1561,11 @@ FOR SELECT USING (
         WHERE qe.customer_id = profiles.id
         AND (public.is_shop_owner(qe.shop_id) OR public.is_shop_staff(qe.shop_id))
     )
-    OR role IN ('owner', 'staff')
+    OR EXISTS (
+        SELECT 1 FROM public.shop_staff ss
+        WHERE ss.user_id = profiles.id
+        AND (public.is_shop_owner(ss.shop_id) OR public.is_shop_staff(ss.shop_id))
+    )
 );
 
 DROP POLICY IF EXISTS "profiles_insert_policy" ON public.profiles;
@@ -1569,25 +1595,13 @@ FOR INSERT WITH CHECK (
     )
 );
 
--- Owners and staff can update operational details, but NEVER self-approve
+-- Owners and staff can update operational details (status & owner_id changes strictly guarded by trg_protect_shop_critical_fields)
 DROP POLICY IF EXISTS "shops_update_policy" ON public.shops;
 CREATE POLICY "shops_update_policy" ON public.shops
 FOR UPDATE USING (
     public.is_admin() OR owner_id = auth.uid() OR public.is_shop_staff(id)
 ) WITH CHECK (
-    public.is_admin()
-    OR (
-        owner_id = auth.uid()
-        -- Regular owners cannot change their shop approval status
-        AND status = (SELECT s.status FROM public.shops s WHERE s.id = shops.id)
-        AND owner_id = (SELECT s.owner_id FROM public.shops s WHERE s.id = shops.id)
-    )
-    OR (
-        public.is_shop_staff(id)
-        -- Staff can only toggle operational fields like is_queue_paused
-        AND status = (SELECT s.status FROM public.shops s WHERE s.id = shops.id)
-        AND owner_id = (SELECT s.owner_id FROM public.shops s WHERE s.id = shops.id)
-    )
+    public.is_admin() OR owner_id = auth.uid() OR public.is_shop_staff(id)
 );
 
 -- 7c. Shop Staff Policies (Strict Shop-Scoped Membership)
