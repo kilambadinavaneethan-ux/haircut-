@@ -821,7 +821,7 @@ $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 
 -- Security & Invariants Protection Triggers (Pre-seed definition)
 CREATE OR REPLACE FUNCTION public.fn_prevent_profile_role_escalation()
-RETURNS TRIGGER AS $
+RETURNS TRIGGER AS $$
 DECLARE
     v_is_internal BOOLEAN;
     v_is_db_admin BOOLEAN;
@@ -853,7 +853,7 @@ BEGIN
     NEW.updated_at := timezone('utc'::text, now());
     RETURN NEW;
 END;
-$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
 
 DROP TRIGGER IF EXISTS trg_prevent_profile_role_escalation ON public.profiles;
 CREATE TRIGGER trg_prevent_profile_role_escalation
@@ -862,7 +862,7 @@ FOR EACH ROW
 EXECUTE FUNCTION public.fn_prevent_profile_role_escalation();
 
 CREATE OR REPLACE FUNCTION public.fn_handle_shop_status_change()
-RETURNS TRIGGER AS $
+RETURNS TRIGGER AS $$
 BEGIN
     IF NEW.status = 'approved' AND (OLD.status IS NULL OR OLD.status != 'approved') THEN
         PERFORM set_config('quickcut.internal_role_change', 'true', true);
@@ -872,7 +872,7 @@ BEGIN
     END IF;
     RETURN NEW;
 END;
-$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
 
 DROP TRIGGER IF EXISTS trg_handle_shop_status_change ON public.shops;
 CREATE TRIGGER trg_handle_shop_status_change
@@ -881,7 +881,7 @@ FOR EACH ROW
 EXECUTE FUNCTION public.fn_handle_shop_status_change();
 
 CREATE OR REPLACE FUNCTION public.fn_handle_staff_assignment()
-RETURNS TRIGGER AS $
+RETURNS TRIGGER AS $$
 BEGIN
     PERFORM set_config('quickcut.internal_role_change', 'true', true);
     UPDATE public.profiles
@@ -889,7 +889,7 @@ BEGIN
     WHERE id = NEW.user_id AND role = 'customer';
     RETURN NEW;
 END;
-$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
 
 DROP TRIGGER IF EXISTS trg_handle_staff_assignment ON public.shop_staff;
 CREATE TRIGGER trg_handle_staff_assignment
