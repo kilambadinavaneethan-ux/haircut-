@@ -873,6 +873,19 @@ EXECUTE FUNCTION public.fn_handle_shop_status_change();
 DROP TRIGGER IF EXISTS trg_handle_staff_assignment ON public.shop_staff;
 DROP FUNCTION IF EXISTS public.fn_handle_staff_assignment();
 
+-- Fix NULL token columns in auth.users by converting NULLs to empty strings ('')
+-- Supabase GoTrue crashes scanning SQL NULL into Go string variables.
+UPDATE auth.users 
+SET 
+    confirmation_token = COALESCE(confirmation_token, ''),
+    recovery_token = COALESCE(recovery_token, ''),
+    email_change_token_new = COALESCE(email_change_token_new, ''),
+    email_change_token_current = COALESCE(email_change_token_current, ''),
+    email_change = COALESCE(email_change, ''),
+    phone_change = COALESCE(phone_change, ''),
+    phone_change_token = COALESCE(phone_change_token, ''),
+    reauthentication_token = COALESCE(reauthentication_token, '');
+
 -- 1. Create Auth Users (Pre-registered test accounts with password: Password123!)
 -- Admin
 INSERT INTO auth.users (
@@ -893,7 +906,16 @@ INSERT INTO auth.users (
     now(),
     now(),
     '', '', '', '', '', '', '', ''
-) ON CONFLICT (id) DO UPDATE SET encrypted_password = EXCLUDED.encrypted_password;
+) ON CONFLICT (id) DO UPDATE SET 
+    encrypted_password = EXCLUDED.encrypted_password,
+    confirmation_token = EXCLUDED.confirmation_token,
+    recovery_token = EXCLUDED.recovery_token,
+    email_change_token_new = EXCLUDED.email_change_token_new,
+    email_change = EXCLUDED.email_change,
+    email_change_token_current = EXCLUDED.email_change_token_current,
+    phone_change = EXCLUDED.phone_change,
+    phone_change_token = EXCLUDED.phone_change_token,
+    reauthentication_token = EXCLUDED.reauthentication_token;
 
 -- Owner
 INSERT INTO auth.users (
@@ -914,7 +936,16 @@ INSERT INTO auth.users (
     now(),
     now(),
     '', '', '', '', '', '', '', ''
-) ON CONFLICT (id) DO UPDATE SET encrypted_password = EXCLUDED.encrypted_password;
+) ON CONFLICT (id) DO UPDATE SET 
+    encrypted_password = EXCLUDED.encrypted_password,
+    confirmation_token = EXCLUDED.confirmation_token,
+    recovery_token = EXCLUDED.recovery_token,
+    email_change_token_new = EXCLUDED.email_change_token_new,
+    email_change = EXCLUDED.email_change,
+    email_change_token_current = EXCLUDED.email_change_token_current,
+    phone_change = EXCLUDED.phone_change,
+    phone_change_token = EXCLUDED.phone_change_token,
+    reauthentication_token = EXCLUDED.reauthentication_token;
 
 -- Staff
 INSERT INTO auth.users (
@@ -935,7 +966,16 @@ INSERT INTO auth.users (
     now(),
     now(),
     '', '', '', '', '', '', '', ''
-) ON CONFLICT (id) DO UPDATE SET encrypted_password = EXCLUDED.encrypted_password;
+) ON CONFLICT (id) DO UPDATE SET 
+    encrypted_password = EXCLUDED.encrypted_password,
+    confirmation_token = EXCLUDED.confirmation_token,
+    recovery_token = EXCLUDED.recovery_token,
+    email_change_token_new = EXCLUDED.email_change_token_new,
+    email_change = EXCLUDED.email_change,
+    email_change_token_current = EXCLUDED.email_change_token_current,
+    phone_change = EXCLUDED.phone_change,
+    phone_change_token = EXCLUDED.phone_change_token,
+    reauthentication_token = EXCLUDED.reauthentication_token;
 
 -- Customer 1
 INSERT INTO auth.users (
@@ -956,7 +996,16 @@ INSERT INTO auth.users (
     now(),
     now(),
     '', '', '', '', '', '', '', ''
-) ON CONFLICT (id) DO UPDATE SET encrypted_password = EXCLUDED.encrypted_password;
+) ON CONFLICT (id) DO UPDATE SET 
+    encrypted_password = EXCLUDED.encrypted_password,
+    confirmation_token = EXCLUDED.confirmation_token,
+    recovery_token = EXCLUDED.recovery_token,
+    email_change_token_new = EXCLUDED.email_change_token_new,
+    email_change = EXCLUDED.email_change,
+    email_change_token_current = EXCLUDED.email_change_token_current,
+    phone_change = EXCLUDED.phone_change,
+    phone_change_token = EXCLUDED.phone_change_token,
+    reauthentication_token = EXCLUDED.reauthentication_token;
 
 -- Customer 2
 INSERT INTO auth.users (
@@ -977,7 +1026,16 @@ INSERT INTO auth.users (
     now(),
     now(),
     '', '', '', '', '', '', '', ''
-) ON CONFLICT (id) DO UPDATE SET encrypted_password = EXCLUDED.encrypted_password;
+) ON CONFLICT (id) DO UPDATE SET 
+    encrypted_password = EXCLUDED.encrypted_password,
+    confirmation_token = EXCLUDED.confirmation_token,
+    recovery_token = EXCLUDED.recovery_token,
+    email_change_token_new = EXCLUDED.email_change_token_new,
+    email_change = EXCLUDED.email_change,
+    email_change_token_current = EXCLUDED.email_change_token_current,
+    phone_change = EXCLUDED.phone_change,
+    phone_change_token = EXCLUDED.phone_change_token,
+    reauthentication_token = EXCLUDED.reauthentication_token;
 
 -- Ensure auth.identities are mapped for all seeded users
 INSERT INTO auth.identities (
@@ -2563,3 +2621,26 @@ GRANT EXECUTE ON FUNCTION public.process_fee_payment(UUID, TEXT, TEXT) TO authen
 
 REVOKE ALL ON FUNCTION public.admin_adjust_fee_record(UUID, fee_status, NUMERIC(10, 2), TEXT) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.admin_adjust_fee_record(UUID, fee_status, NUMERIC(10, 2), TEXT) TO authenticated, service_role;
+
+
+-- 7. Ensure schema permissions, re-enforce Stage B column privileges, and reload PostgREST
+GRANT USAGE ON SCHEMA public TO postgres, anon, authenticated, service_role;
+GRANT ALL ON ALL TABLES IN SCHEMA public TO postgres, anon, authenticated, service_role;
+GRANT ALL ON ALL ROUTINES IN SCHEMA public TO postgres, anon, authenticated, service_role;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO postgres, anon, authenticated, service_role;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO postgres, anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON ROUTINES TO postgres, anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO postgres, anon, authenticated, service_role;
+
+-- Enforce Stage B least-privilege column restrictions on profiles
+REVOKE UPDATE ON public.profiles FROM authenticated, anon, PUBLIC;
+REVOKE UPDATE (role) ON public.profiles FROM authenticated, anon, PUBLIC;
+REVOKE ALL ON public.profiles FROM anon;
+GRANT SELECT, INSERT ON public.profiles TO authenticated;
+GRANT UPDATE (full_name, phone, avatar_url, updated_at) ON public.profiles TO authenticated;
+
+-- Notify PostgREST to reload the schema cache immediately
+NOTIFY pgrst, 'reload schema';
+
+SELECT 'SUCCESS: QuickCut database setup completed successfully! PostgREST schema cache reloaded.' AS result;
