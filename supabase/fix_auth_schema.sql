@@ -57,7 +57,14 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO postgres, anon,
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON ROUTINES TO postgres, anon, authenticated, service_role;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO postgres, anon, authenticated, service_role;
 
--- 4. Notify PostgREST to reload the schema cache
+-- 4. Enforce Stage B least-privilege column restrictions on profiles
+REVOKE UPDATE ON public.profiles FROM authenticated, anon, PUBLIC;
+REVOKE UPDATE (role) ON public.profiles FROM authenticated, anon, PUBLIC;
+REVOKE ALL ON public.profiles FROM anon;
+GRANT SELECT, INSERT ON public.profiles TO authenticated;
+GRANT UPDATE (full_name, phone, avatar_url, updated_at) ON public.profiles TO authenticated;
+
+-- 5. Notify PostgREST to reload the schema cache
 NOTIFY pgrst, 'reload schema';
 
-SELECT 'SUCCESS: auth.users tokens patched, identities linked, and schema reloaded!' AS result;
+SELECT 'SUCCESS: auth.users tokens patched, identities linked, Stage B privileges secured, and schema reloaded!' AS result;
