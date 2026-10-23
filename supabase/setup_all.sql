@@ -1554,11 +1554,7 @@ CREATE POLICY "profiles_update_policy" ON public.profiles
 FOR UPDATE USING (
     id = auth.uid() OR public.is_admin()
 ) WITH CHECK (
-    public.is_admin()
-    OR (
-        id = auth.uid()
-        AND role = (SELECT p.role FROM public.profiles p WHERE p.id = profiles.id)
-    )
+    id = auth.uid() OR public.is_admin()
 );
 
 -- 7b. Shops Policies
