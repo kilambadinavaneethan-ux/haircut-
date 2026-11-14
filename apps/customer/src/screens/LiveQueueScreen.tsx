@@ -100,7 +100,9 @@ export function LiveQueueScreen({
       uniqueInService.forEach((e: any) => {
         totalWait += e.service?.avg_minutes || 20;
       });
-      setEstimatedMinutes(totalWait);
+      // Divide workload across active parallel barbers (M/M/c)
+      const barberCount = (activeEntry as any)?.shop?.active_barbers_count || 1;
+      setEstimatedMinutes(Math.ceil(totalWait / Math.max(1, barberCount)));
 
       // Trigger Push Notification when exactly 2 customers are ahead
       if (aheadCount === 2 && !notifiedTwoAheadRef.current) {

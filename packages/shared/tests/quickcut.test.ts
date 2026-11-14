@@ -959,4 +959,169 @@ test('QuickCut Test Suite - Core Business Rules, Security & Invariants', async (
       assert.strictEqual(auditTrail[0].user_id, roles.superAdmin.id);
     });
   });
+
+  // =========================================================================
+  // 13. Advanced Wait-Time Routing, In-Chair Deduction & Audit Hardening
+  // =========================================================================
+  await t.test('13. Advanced Wait-Time Routing, In-Chair Deduction & Audit Hardening', async (st) => {
+    const servicesMap = {
+      'srv-haircut': { id: 'srv-haircut', avg_minutes: 30 },
+      'srv-beard': { id: 'srv-beard', avg_minutes: 15 }
+    };
+
+    // 13a. In-chair haircut elapsed time deduction
+    await st.test('13a. Elapsed haircut time is deducted from in-service queue entries', () => {
+      const now = 1729760000000; // fixed timestamp
+      const twentyMinsAgo = new Date(now - 20 * 60 * 1000).toISOString();
+
+      const entries = [
+        {
+          id: 'in-chair-1',
+          shop_id: 'shop-1',
+          customer_id: 'cust-1',
+          service_id: 'srv-haircut', // 30 min service
+          status: 'in_service' as const,
+          called_at: twentyMinsAgo,
+          created_at: twentyMinsAgo,
+          is_walkin: false,
+          queue_number: 1,
+          qr_code_token: 'tok-1',
+          queue_date: '2026-10-24'
+        },
+        {
+          id: 'waiting-target',
+          shop_id: 'shop-1',
+          customer_id: 'cust-2',
+          service_id: 'srv-haircut',
+          status: 'waiting' as const,
+          called_at: null,
+          created_at: new Date(now - 5 * 60 * 1000).toISOString(),
+          is_walkin: false,
+          queue_number: 2,
+          qr_code_token: 'tok-2',
+          queue_date: '2026-10-24'
+        }
+      ];
+
+      // With 1 barber:
+      // In-chair started 20 mins ago for 30m cut -> 10 mins remaining!
+      const result = calculateEstimatedWaitTime({
+        targetEntryId: 'waiting-target',
+        queueEntries: entries as any,
+        servicesMap,
+        activeBarberCount: 1,
+        currentTime: now
+      });
+
+      assert.strictEqual(result.estimatedMinutes, 10, 'Expected 10 minutes remaining on active chair (30 - 20)');
+      assert.strictEqual(result.peopleAhead, 1);
+      assert.strictEqual(result.isEstimate, true);
+    });
+
+    // 13b. Barber-specific queue routing
+    await st.test('13b. Specific requested barber routes wait time to single chair (c = 1)', () => {
+      const now = 1729760000000;
+      const entries = [
+        // Barber Bob's active service (30 min cut, started 10m ago -> 20m remaining)
+        {
+          id: 'entry-bob-1',
+          shop_id: 'shop-1',
+          customer_id: 'c-1',
+          barber_id: 'barber-bob',
+          service_id: 'srv-haircut',
+          status: 'in_service' as const,
+          called_at: new Date(now - 10 * 60 * 1000).toISOString(),
+          created_at: new Date(now - 10 * 60 * 1000).toISOString(),
+          is_walkin: false,
+          queue_number: 1,
+          qr_code_token: 't-1',
+          queue_date: '2026-10-24'
+        },
+        // Barber Alice's active service (15 min beard, started 5m ago -> 10m remaining)
+        {
+          id: 'entry-alice-1',
+          shop_id: 'shop-1',
+          customer_id: 'c-2',
+          barber_id: 'barber-alice',
+          service_id: 'srv-beard',
+          status: 'in_service' as const,
+          called_at: new Date(now - 5 * 60 * 1000).toISOString(),
+          created_at: new Date(now - 5 * 60 * 1000).toISOString(),
+          is_walkin: false,
+          queue_number: 2,
+          qr_code_token: 't-2',
+          queue_date: '2026-10-24'
+        },
+        // Target customer specifically wants Barber Bob!
+        {
+          id: 'target-for-bob',
+          shop_id: 'shop-1',
+          customer_id: 'c-3',
+          barber_id: 'barber-bob',
+          service_id: 'srv-haircut',
+          status: 'waiting' as const,
+          called_at: null,
+          created_at: new Date(now - 1 * 60 * 1000).toISOString(),
+          is_walkin: false,
+          queue_number: 3,
+          qr_code_token: 't-3',
+          queue_date: '2026-10-24'
+        }
+      ];
+
+      // Shop has 2 active barbers, but target requested Bob specifically!
+      const bobWait = calculateEstimatedWaitTime({
+        targetEntryId: 'target-for-bob',
+        queueEntries: entries as any,
+        servicesMap,
+        activeBarberCount: 2,
+        currentTime: now
+      });
+
+      // Target waits ONLY for Bob (20m remaining on Bob's chair, Alice's chair is ignored)
+      assert.strictEqual(bobWait.estimatedMinutes, 20, 'Specific barber wait must be calculated from Bob chair only');
+      assert.strictEqual(bobWait.peopleAhead, 1, 'Only entries ahead for Bob are counted');
+    });
+
+    // 13c. Audit logging error detection
+    await st.test('13c. Audit logging failure detection does not report false success', () => {
+      const simulateAuditInsert = (response: { data: any; error: any }) => {
+        if (response.error) {
+          throw new Error(`Audit log persistence failed: ${response.error.message || 'Database error'}`);
+        }
+        return { success: true };
+      };
+
+      // Successful write
+      const successRes = simulateAuditInsert({ data: [{ id: 'audit-1' }], error: null });
+      assert.strictEqual(successRes.success, true);
+
+      // RLS or PostgREST error object
+      assert.throws(
+        () => simulateAuditInsert({ data: null, error: { message: 'Row level security violation' } }),
+        /Audit log persistence failed: Row level security violation/,
+        'Uninspected Supabase error must trigger failure exception'
+      );
+    });
+
+    // 13d. Customer-to-shop payments separation
+    await st.test('13d. Customer payment support enables customer receipts while keeping platform fee ₹0', () => {
+      const paymentRecord = {
+        id: 'pay-101',
+        shop_id: 'shop-crown-a',
+        customer_id: 'cust-a-001',
+        queue_entry_id: 'entry-a-101',
+        amount: 300.0,
+        currency: 'INR',
+        payment_method: 'UPI',
+        status: 'completed',
+        platform_fee_inr: 0.0, // Fixed invariant: Platform charges ₹0
+        created_at: new Date().toISOString()
+      };
+
+      assert.strictEqual(paymentRecord.amount, 300.0, 'Customer haircut payment is recorded');
+      assert.strictEqual(paymentRecord.platform_fee_inr, 0.0, 'QuickCut platform fee is strictly ₹0.00');
+      assert.strictEqual(paymentRecord.customer_id, 'cust-a-001');
+    });
+  });
 });

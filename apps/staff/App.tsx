@@ -46,15 +46,28 @@ export default function StaffApp() {
   const logAudit = async (action: string, entityId: string, payload: Record<string, unknown>) => {
     if (!sessionUser) return;
     try {
-      await (supabase.from('audit_logs') as any).insert({
+      // 1. Try secure staff audit RPC first
+      const { error: rpcError } = await (supabase.rpc as any)('log_staff_audit_event', {
+        p_action: action,
+        p_entity_id: entityId,
+        p_payload: payload
+      });
+
+      if (!rpcError) return;
+
+      // 2. Direct insert fallback with error checking
+      const { error } = await (supabase.from('audit_logs') as any).insert({
         user_id: sessionUser.id,
         action,
         entity_type: 'queue_entries',
         entity_id: entityId,
         payload
       });
+      if (error) {
+        console.warn('Audit logging failed with error:', error.message || error);
+      }
     } catch (e) {
-      console.warn('Audit logging failed:', e);
+      console.warn('Audit logging exception:', e);
     }
   };
 
