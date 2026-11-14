@@ -30,7 +30,8 @@ QuickCut is a high-reliability, real-time barber shop queue management monorepo 
 │   │   ├── 20261024000003_qr_join_queue_and_security_hardening.sql
 │   │   ├── 20261024000004_payment_and_audit_hardening.sql
 │   │   ├── 20261024000005_storage_and_error_sanitization.sql
-│   │   └── 20261024000006_refined_wait_time_simulation.sql
+│   │   ├── 20261024000006_refined_wait_time_simulation.sql
+│   │   └── 20261024000007_prevent_customer_self_checkin_and_discrete_sim.sql
 │   ├── seed.sql        # Realistic development seed data (Strictly for local testing)
 │   └── setup_all.sql   # Consolidated end-to-end idempotent deployment script
 └── package.json        # Workspace orchestrator with multi-application validation scripts
@@ -184,6 +185,7 @@ npm run test:integration
 11. `20261024000004_payment_and_audit_hardening.sql` - Customer payments support & staff audit trail
 12. `20261024000005_storage_and_error_sanitization.sql` - Storage bucket RLS & QR error sanitization
 13. `20261024000006_refined_wait_time_simulation.sql` - Multi-server discrete wait-time estimation
+14. `20261024000007_prevent_customer_self_checkin_and_discrete_sim.sql` - Critical QR self-checkin prevention & discrete multi-server scheduling synchronization
 
 ### Local Supabase Setup:
 ```bash

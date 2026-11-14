@@ -11,10 +11,12 @@ import {
 import {
   QueueEntryWithDetails,
   formatEstimatedWaitDisplay,
-  getSupabaseClient
+  getSupabaseClient,
+  generateQueueQRPayload,
+  calculateEstimatedWaitTime
 } from '@quickcut/shared';
 import { notifyTwoAhead } from '../services/notifications';
-import { QRScannerModal } from '../components/QRScannerModal';
+import { QRCodeDisplay } from '../components/QRCodeDisplay';
 
 interface LiveQueueScreenProps {
   activeEntry: QueueEntryWithDetails | null;
@@ -33,7 +35,6 @@ export function LiveQueueScreen({
   const [estimatedMinutes, setEstimatedMinutes] = useState(0);
   const [loading, setLoading] = useState(false);
   const [cancelling, setCancelling] = useState(false);
-  const [scannerVisible, setScannerVisible] = useState(false);
 
   // Prevent multiple duplicate push notifications for the same ticket
   const notifiedTwoAheadRef = useRef<boolean>(false);
@@ -59,7 +60,7 @@ export function LiveQueueScreen({
 
       if (!rpcError && rpcData) {
         const ahead = rpcData.people_ahead || 0;
-        const mins = rpcData.estimated_minutes || 0;
+        const mins = rpcData.estimated_minutes ?? 0;
         setPeopleAhead(ahead);
         setEstimatedMinutes(mins);
 
@@ -73,39 +74,36 @@ export function LiveQueueScreen({
         return;
       }
 
-      // 2. Fallback query (Strict deduplication - no double counting)
-      const { data: waitingAhead } = await supabase
+      // 2. Discrete Multi-Server Fallback calculation
+      const { data: queueData } = await supabase
         .from('queue_entries')
-        .select('id, status, created_at, service:services(avg_minutes)')
+        .select('*')
         .eq('shop_id', activeEntry.shop_id)
-        .eq('status', 'waiting')
-        .lt('created_at', activeEntry.created_at);
+        .in('status', ['waiting', 'in_service']);
 
-      const { data: inServiceEntries } = await supabase
-        .from('queue_entries')
-        .select('id, service:services(avg_minutes)')
-        .eq('shop_id', activeEntry.shop_id)
-        .eq('status', 'in_service');
+      const { data: servicesData } = await supabase
+        .from('services')
+        .select('id, avg_minutes')
+        .eq('shop_id', activeEntry.shop_id);
 
-      const uniqueInService = (inServiceEntries as any[] || []).filter((e: any) => e.id !== activeEntry.id);
-      const uniqueWaiting = (waitingAhead as any[]) || [];
-
-      const aheadCount = uniqueWaiting.length + uniqueInService.length;
-      setPeopleAhead(aheadCount);
-
-      let totalWait = 0;
-      uniqueWaiting.forEach((e: any) => {
-        totalWait += e.service?.avg_minutes || 20;
+      const servicesMap: Record<string, Pick<any, 'id' | 'avg_minutes'>> = {};
+      (servicesData || []).forEach((s: any) => {
+        servicesMap[s.id] = s;
       });
-      uniqueInService.forEach((e: any) => {
-        totalWait += e.service?.avg_minutes || 20;
-      });
-      // Divide workload across active parallel barbers (M/M/c)
+
       const barberCount = (activeEntry as any)?.shop?.active_barbers_count || 1;
-      setEstimatedMinutes(Math.ceil(totalWait / Math.max(1, barberCount)));
+      const calc = calculateEstimatedWaitTime({
+        targetEntryId: activeEntry.id,
+        queueEntries: (queueData as any[]) || [activeEntry],
+        servicesMap,
+        activeBarberCount: barberCount
+      });
+
+      setPeopleAhead(calc.peopleAhead);
+      setEstimatedMinutes(calc.estimatedMinutes);
 
       // Trigger Push Notification when exactly 2 customers are ahead
-      if (aheadCount === 2 && !notifiedTwoAheadRef.current) {
+      if (calc.peopleAhead === 2 && !notifiedTwoAheadRef.current) {
         notifiedTwoAheadRef.current = true;
         await notifyTwoAhead(
           activeEntry.shop?.name || 'the Barbershop',
@@ -185,27 +183,6 @@ export function LiveQueueScreen({
     );
   };
 
-  // Check in upon scanning shop QR code
-  const handleCheckInSuccess = async (tokenOrCode: string) => {
-    if (!activeEntry) return;
-
-    try {
-      // 1. Try secure database RPC
-      const { data, error } = await (supabase.rpc as any)('verify_qr_checkin', {
-        p_entry_id: activeEntry.id,
-        p_qr_token: tokenOrCode.trim()
-      });
-
-      if (error) throw error;
-
-      Alert.alert('Checked In Successfully!', 'Your arrival has been verified by the shop.');
-      await onRefresh();
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Invalid shop QR code';
-      Alert.alert('Check-In Failed', msg);
-    }
-  };
-
   if (!activeEntry) {
     return (
       <View style={styles.emptyContainer}>
@@ -224,6 +201,7 @@ export function LiveQueueScreen({
   }
 
   const isCheckedIn = !!activeEntry.checked_in_at;
+  const qrPayload = generateQueueQRPayload(activeEntry.id, activeEntry.shop_id, activeEntry.qr_code_token);
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
@@ -268,41 +246,52 @@ export function LiveQueueScreen({
           </View>
         </View>
 
-        {/* Check-In Status Card */}
+        {/* Arrival Check-In Pass / Verified Status Card */}
         <View style={styles.checkInCard}>
-          <View style={styles.checkInRow}>
-            <View>
-              <Text style={styles.checkInTitle}>Arrival Check-In</Text>
-              <Text style={styles.checkInSubtitle}>
-                {isCheckedIn
-                  ? 'Verified: You are marked as present at the shop.'
-                  : 'Scan the shop QR code when you arrive to confirm presence.'}
+          {isCheckedIn ? (
+            <View style={styles.verifiedContainer}>
+              <View style={styles.verifiedHeaderRow}>
+                <View style={styles.verifiedIconCircle}>
+                  <Text style={styles.verifiedIconText}>✓</Text>
+                </View>
+                <View style={{ flex: 1, marginLeft: 12 }}>
+                  <Text style={styles.verifiedTitle}>Arrival Verified by Shop</Text>
+                  <Text style={styles.verifiedSubtitle}>
+                    Verified on arrival by {activeEntry.shop?.name} staff.
+                  </Text>
+                </View>
+                <View style={styles.badgeVerified}>
+                  <Text style={styles.textVerified}>CHECKED IN</Text>
+                </View>
+              </View>
+              <Text style={styles.verifiedSeatNote}>
+                You are confirmed present in the shop. Please have a seat; the barber will call your ticket soon.
               </Text>
             </View>
-            <View
-              style={[
-                styles.checkInStatusBadge,
-                isCheckedIn ? styles.badgeVerified : styles.badgePending
-              ]}
-            >
-              <Text
-                style={[
-                  styles.checkInStatusText,
-                  isCheckedIn ? styles.textVerified : styles.textPending
-                ]}
-              >
-                {isCheckedIn ? 'CHECKED IN' : 'NOT CHECKED IN'}
+          ) : (
+            <View style={styles.qrPassContainer}>
+              <View style={styles.qrPassHeader}>
+                <Text style={styles.qrPassTitle}>In-Shop Arrival Pass</Text>
+                <View style={styles.badgePending}>
+                  <Text style={styles.textPending}>NOT CHECKED IN</Text>
+                </View>
+              </View>
+              <Text style={styles.qrPassSubtitle}>
+                Show this QR pass to the barber upon your arrival at {activeEntry.shop?.name || 'the shop'}.
               </Text>
-            </View>
-          </View>
 
-          {!isCheckedIn && (
-            <TouchableOpacity
-              style={styles.scanShopQrBtn}
-              onPress={() => setScannerVisible(true)}
-            >
-              <Text style={styles.scanShopQrBtnText}>📷 Scan Shop QR to Check In</Text>
-            </TouchableOpacity>
+              {/* Personal Ticket QR Code */}
+              <View style={styles.qrWrapper}>
+                <QRCodeDisplay value={qrPayload} size={190} />
+              </View>
+
+              <View style={styles.qrStatusPill}>
+                <Text style={styles.qrStatusPillText}>⏳ Waiting for shop staff verification</Text>
+              </View>
+              <Text style={styles.qrHelpNote}>
+                Shop staff will scan this code with the Staff App to verify your presence.
+              </Text>
+            </View>
           )}
         </View>
 
@@ -319,14 +308,6 @@ export function LiveQueueScreen({
           )}
         </TouchableOpacity>
       </View>
-
-      {/* QR Scanner Modal for Shop Check-In */}
-      <QRScannerModal
-        visible={scannerVisible}
-        shopName={activeEntry.shop?.name || 'Barbershop'}
-        onClose={() => setScannerVisible(false)}
-        onCheckInSuccess={handleCheckInSuccess}
-      />
     </ScrollView>
   );
 }
@@ -463,22 +444,105 @@ const styles = StyleSheet.create({
     fontWeight: '800'
   },
   textVerified: {
-    color: '#10B981'
+    color: '#10B981',
+    fontWeight: '800',
+    fontSize: 11
   },
   textPending: {
-    color: '#F59E0B'
+    color: '#F59E0B',
+    fontWeight: '800',
+    fontSize: 11
   },
-  scanShopQrBtn: {
-    backgroundColor: '#38BDF8',
-    paddingVertical: 12,
-    borderRadius: 10,
+  verifiedContainer: {
+    paddingVertical: 4
+  },
+  verifiedHeaderRow: {
+    flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 14
+    marginBottom: 8
   },
-  scanShopQrBtnText: {
-    color: '#0F172A',
-    fontSize: 14,
+  verifiedIconCircle: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(16, 185, 129, 0.2)',
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  verifiedIconText: {
+    color: '#10B981',
+    fontSize: 18,
+    fontWeight: '800'
+  },
+  verifiedTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#F8FAFC'
+  },
+  verifiedSubtitle: {
+    fontSize: 12,
+    color: '#94A3B8',
+    marginTop: 2
+  },
+  verifiedSeatNote: {
+    fontSize: 12,
+    color: '#10B981',
+    lineHeight: 18,
+    marginTop: 4
+  },
+  qrPassContainer: {
+    alignItems: 'center'
+  },
+  qrPassHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    width: '100%',
+    marginBottom: 6
+  },
+  qrPassTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#F8FAFC'
+  },
+  qrPassSubtitle: {
+    fontSize: 12,
+    color: '#94A3B8',
+    textAlign: 'center',
+    marginBottom: 14,
+    lineHeight: 16
+  },
+  qrWrapper: {
+    marginVertical: 6,
+    padding: 8,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 4
+  },
+  qrStatusPill: {
+    backgroundColor: 'rgba(245, 158, 11, 0.15)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(245, 158, 11, 0.3)'
+  },
+  qrStatusPillText: {
+    color: '#F59E0B',
+    fontSize: 12,
     fontWeight: '700'
+  },
+  qrHelpNote: {
+    fontSize: 11,
+    color: '#64748B',
+    textAlign: 'center',
+    marginTop: 8,
+    paddingHorizontal: 16
   },
   cancelBtn: {
     width: '100%',

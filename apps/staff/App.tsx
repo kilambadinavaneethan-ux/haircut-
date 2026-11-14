@@ -409,6 +409,12 @@ export default function StaffApp() {
   const handleVerifyQRScan = async (codeOrToken: string) => {
     const trimmed = codeOrToken.trim();
     const parsedQR = parseQueueQRPayload(trimmed);
+
+    // Strict cross-shop validation: Verify ticket belongs to staff's assigned shop
+    if (parsedQR && assignedShop && parsedQR.shopId !== assignedShop.id) {
+      throw new Error(`Cross-shop check-in rejected: This QR pass belongs to another barber shop.`);
+    }
+
     const target = targetEntryForQR || (parsedQR
       ? queue.find((e) => e.id === parsedQR.entryId)
       : queue.find((e) => e.qr_code_token.toLowerCase() === trimmed.toLowerCase())
@@ -416,6 +422,10 @@ export default function StaffApp() {
 
     if (!target) {
       throw new Error(`No waiting ticket matched the provided cryptographic QR token.`);
+    }
+
+    if (assignedShop && target.shop_id !== assignedShop.id) {
+      throw new Error(`Cross-shop check-in rejected: Ticket does not belong to your shop.`);
     }
 
     try {

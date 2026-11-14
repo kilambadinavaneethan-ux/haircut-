@@ -236,14 +236,15 @@ test('QuickCut Test Suite - Core Business Rules, Security & Invariants', async (
     assert.strictEqual(calculation.peopleAhead, 2, 'Should count exactly 2 customers ahead');
     assert.strictEqual(calculation.isEstimate, true, 'Result must be designated as an estimate');
 
-    // Multi-barber test: With 2 active barbers, 40 mins workload completes in ~20 mins
+    // Multi-barber test: With 2 active barbers, discrete simulation dispatches in-chair (25m) to Barber 1,
+    // waiting ahead (15m) to Barber 2. Target customer is served when Barber 2 finishes at 15 mins.
     const multiBarberCalc = calculateEstimatedWaitTime({
       targetEntryId: 'target-ticket',
       queueEntries,
       servicesMap,
       activeBarberCount: 2
     });
-    assert.strictEqual(multiBarberCalc.estimatedMinutes, 20, 'With 2 barbers, 40 mins workload completes in ~20 mins');
+    assert.strictEqual(multiBarberCalc.estimatedMinutes, 15, 'With 2 barbers, target is served as soon as earliest barber finishes (15 mins)');
 
     // Display format tests
     assert.strictEqual(formatEstimatedWaitDisplay(0), 'Ready next (Est. < 5 mins)');
@@ -1232,24 +1233,24 @@ test('QuickCut Test Suite - Core Business Rules, Security & Invariants', async (
   });
 
   // =========================================================================
-  // 15. Discrete Multi-Server Wait-Time Simulation & Barber Routing (Task 5)
+  // 15. Discrete Multi-Server Wait-Time Simulation & Barber Routing (Task 4)
   // =========================================================================
   await t.test('15. Discrete Multi-Server Wait-Time Simulation & Barber Routing', async (suite) => {
     const servicesMap = {
       'svc-standard': { id: 'svc-standard', avg_minutes: 25 },
       'svc-quick': { id: 'svc-quick', avg_minutes: 10 },
-      'svc-beard': { id: 'svc-beard', avg_minutes: 15 }
+      'svc-beard': { id: 'svc-beard', avg_minutes: 15 },
+      'svc-long': { id: 'svc-long', avg_minutes: 40 }
     };
 
-    // 15a. Target requesting specific barber vs unassigned customer
-    await suite.test('15a. Discrete Barber Routing: Requested Barber vs Earliest Available Barber', () => {
+    // 15a. Uneven workloads: Barber A 40 minutes in-chair, Barber B 0 minutes free
+    await suite.test('15a. Uneven workloads: Barber A 40 mins vs Barber B 0 mins', () => {
       const now = Date.now();
       const entries = [
-        // Barber 1 in service (25 mins remaining)
         {
-          id: 'b1-in-service',
+          id: 'b1-long-chair',
           shop_id: 'shop-1',
-          service_id: 'svc-standard',
+          service_id: 'svc-long', // 40 mins
           status: 'in_service' as const,
           created_at: new Date(now - 1000).toISOString(),
           called_at: new Date(now).toISOString(),
@@ -1257,8 +1258,8 @@ test('QuickCut Test Suite - Core Business Rules, Security & Invariants', async (
           is_walkin: false,
           is_billable: false,
           queue_date: '2026-10-24',
-          customer_id: 'cust-b1-chair',
-          barber_id: 'barber-1',
+          customer_id: 'cust-b1',
+          barber_id: 'barber-A',
           guest_name: null,
           guest_phone: null,
           qr_code_token: 'TOK-1',
@@ -1266,121 +1267,47 @@ test('QuickCut Test Suite - Core Business Rules, Security & Invariants', async (
           completed_at: null,
           updated_at: new Date(now).toISOString()
         },
-        // Barber 2 in service (10 mins remaining)
         {
-          id: 'b2-in-service',
+          id: 'target-unassigned-1',
           shop_id: 'shop-1',
-          service_id: 'svc-quick',
-          status: 'in_service' as const,
-          created_at: new Date(now - 1000).toISOString(),
-          called_at: new Date(now).toISOString(),
+          service_id: 'svc-standard',
+          status: 'waiting' as const,
+          created_at: new Date(now + 1000).toISOString(),
+          called_at: null,
           queue_number: 2,
           is_walkin: false,
           is_billable: false,
           queue_date: '2026-10-24',
-          customer_id: 'cust-b2-chair',
-          barber_id: 'barber-2',
-          guest_name: null,
-          guest_phone: null,
-          qr_code_token: 'TOK-2',
-          checked_in_at: new Date(now).toISOString(),
-          completed_at: null,
-          updated_at: new Date(now).toISOString()
-        },
-        // Waiting customer assigned to Barber 1 (20 mins)
-        {
-          id: 'b1-waiting-ahead',
-          shop_id: 'shop-1',
-          service_id: 'svc-beard', // 15 mins
-          status: 'waiting' as const,
-          created_at: new Date(now + 1000).toISOString(),
-          called_at: null,
-          queue_number: 3,
-          is_walkin: false,
-          is_billable: false,
-          queue_date: '2026-10-24',
-          customer_id: 'cust-b1-wait',
-          barber_id: 'barber-1',
-          guest_name: null,
-          guest_phone: null,
-          qr_code_token: 'TOK-3',
-          checked_in_at: null,
-          completed_at: null,
-          updated_at: new Date(now + 1000).toISOString()
-        },
-        // Target requesting Barber 1: Must wait for Barber 1's chair (25 + 15 = 40 mins)
-        {
-          id: 'target-barber-1',
-          shop_id: 'shop-1',
-          service_id: 'svc-standard',
-          status: 'waiting' as const,
-          created_at: new Date(now + 2000).toISOString(),
-          called_at: null,
-          queue_number: 4,
-          is_walkin: false,
-          is_billable: false,
-          queue_date: '2026-10-24',
-          customer_id: 'cust-target-b1',
-          barber_id: 'barber-1',
-          guest_name: null,
-          guest_phone: null,
-          qr_code_token: 'TOK-4',
-          checked_in_at: null,
-          completed_at: null,
-          updated_at: new Date(now + 2000).toISOString()
-        },
-        // Target with NO preferred barber: Served by Barber 2 when Barber 2 finishes (10 mins)
-        {
-          id: 'target-unassigned',
-          shop_id: 'shop-1',
-          service_id: 'svc-standard',
-          status: 'waiting' as const,
-          created_at: new Date(now + 2000).toISOString(),
-          called_at: null,
-          queue_number: 5,
-          is_walkin: false,
-          is_billable: false,
-          queue_date: '2026-10-24',
-          customer_id: 'cust-target-any',
+          customer_id: 'cust-target-1',
           barber_id: null,
           guest_name: null,
           guest_phone: null,
-          qr_code_token: 'TOK-5',
+          qr_code_token: 'TOK-2',
           checked_in_at: null,
           completed_at: null,
-          updated_at: new Date(now + 2000).toISOString()
+          updated_at: new Date(now + 1000).toISOString()
         }
       ];
 
-      // Calculation for customer requesting Barber 1
-      const calcB1 = calculateEstimatedWaitTime({
-        targetEntryId: 'target-barber-1',
+      const calc = calculateEstimatedWaitTime({
+        targetEntryId: 'target-unassigned-1',
         queueEntries: entries,
         servicesMap,
-        activeBarberCount: 2,
+        activeBarberIds: ['barber-A', 'barber-B'],
         currentTime: now
       });
-      assert.strictEqual(calcB1.estimatedMinutes, 40, 'Target requesting Barber 1 must wait 40 mins (25 in-chair + 15 waiting ahead)');
-      assert.strictEqual(calcB1.peopleAhead, 2, 'Only 2 relevant people ahead in Barber 1 chair queue');
 
-      // Calculation for unassigned customer joining at the same queue depth
-      const calcUnassigned = calculateEstimatedWaitTime({
-        targetEntryId: 'target-unassigned',
-        queueEntries: entries,
-        servicesMap,
-        activeBarberCount: 2,
-        currentTime: now
-      });
-      assert.strictEqual(calcUnassigned.estimatedMinutes, 10, 'Unassigned customer takes earliest available barber (Barber 2 ready in 10 mins, NOT naive average)');
+      // Barber A timeline: 40m, Barber B timeline: 0m. Unassigned gets Barber B at 0m.
+      assert.strictEqual(calc.estimatedMinutes, 0, 'Unassigned customer takes completely free Barber B (0 mins)');
+      assert.strictEqual(formatEstimatedWaitDisplay(calc.estimatedMinutes), 'Ready next (Est. < 5 mins)');
     });
 
-    // 15b. Greedy dispatch of unassigned waiting customer ahead
-    await suite.test('15b. Greedy multi-server dispatch for unassigned waiting customers', () => {
+    // 15b. Dedicated Barber A queue
+    await suite.test('15b. Dedicated Barber A queue: target waits for requested barber chair', () => {
       const now = Date.now();
       const entries = [
-        // Barber 1 in service (30 mins remaining)
         {
-          id: 'b1-busy',
+          id: 'b1-chair',
           shop_id: 'shop-1',
           service_id: 'svc-standard', // 25 mins
           status: 'in_service' as const,
@@ -1390,8 +1317,8 @@ test('QuickCut Test Suite - Core Business Rules, Security & Invariants', async (
           is_walkin: false,
           is_billable: false,
           queue_date: '2026-10-24',
-          customer_id: 'cust-1',
-          barber_id: 'barber-1',
+          customer_id: 'cust-b1',
+          barber_id: 'barber-A',
           guest_name: null,
           guest_phone: null,
           qr_code_token: 'TOK-1',
@@ -1399,32 +1326,30 @@ test('QuickCut Test Suite - Core Business Rules, Security & Invariants', async (
           completed_at: null,
           updated_at: new Date(now).toISOString()
         },
-        // Barber 2 in service (10 mins remaining)
         {
-          id: 'b2-fast',
+          id: 'b1-wait-ahead',
           shop_id: 'shop-1',
-          service_id: 'svc-quick', // 10 mins
-          status: 'in_service' as const,
-          created_at: new Date(now - 1000).toISOString(),
-          called_at: new Date(now).toISOString(),
+          service_id: 'svc-beard', // 15 mins
+          status: 'waiting' as const,
+          created_at: new Date(now + 500).toISOString(),
+          called_at: null,
           queue_number: 2,
           is_walkin: false,
           is_billable: false,
           queue_date: '2026-10-24',
-          customer_id: 'cust-2',
-          barber_id: 'barber-2',
+          customer_id: 'cust-b1-wait',
+          barber_id: 'barber-A',
           guest_name: null,
           guest_phone: null,
           qr_code_token: 'TOK-2',
-          checked_in_at: new Date(now).toISOString(),
+          checked_in_at: null,
           completed_at: null,
-          updated_at: new Date(now).toISOString()
+          updated_at: new Date(now + 500).toISOString()
         },
-        // Unassigned waiting customer ahead (15 mins) -> Greedy dispatch assigns to Barber 2 (10 + 15 = 25 mins)
         {
-          id: 'unassigned-ahead',
+          id: 'target-barber-A',
           shop_id: 'shop-1',
-          service_id: 'svc-beard', // 15 mins
+          service_id: 'svc-standard',
           status: 'waiting' as const,
           created_at: new Date(now + 1000).toISOString(),
           called_at: null,
@@ -1432,48 +1357,943 @@ test('QuickCut Test Suite - Core Business Rules, Security & Invariants', async (
           is_walkin: false,
           is_billable: false,
           queue_date: '2026-10-24',
-          customer_id: 'cust-3',
-          barber_id: null,
+          customer_id: 'cust-target-A',
+          barber_id: 'barber-A',
           guest_name: null,
           guest_phone: null,
           qr_code_token: 'TOK-3',
           checked_in_at: null,
           completed_at: null,
           updated_at: new Date(now + 1000).toISOString()
-        },
-        // Target unassigned: Next available chair is Barber 2 (25 mins) vs Barber 1 (25 mins)
+        }
+      ];
+
+      const calc = calculateEstimatedWaitTime({
+        targetEntryId: 'target-barber-A',
+        queueEntries: entries,
+        servicesMap,
+        activeBarberIds: ['barber-A', 'barber-B'],
+        currentTime: now
+      });
+
+      // Barber A has 25 in chair + 15 waiting = 40 mins
+      assert.strictEqual(calc.estimatedMinutes, 40, 'Target requesting Barber A must wait 40 mins');
+      assert.strictEqual(calc.peopleAhead, 2, 'Exactly 2 people ahead in Barber A line');
+    });
+
+    // 15c. Dedicated Barber B queue
+    await suite.test('15c. Dedicated Barber B queue: target requesting free Barber B chair', () => {
+      const now = Date.now();
+      const entries = [
         {
-          id: 'target-entry',
+          id: 'b1-busy-entry',
+          shop_id: 'shop-1',
+          service_id: 'svc-standard', // 25 mins
+          status: 'in_service' as const,
+          created_at: new Date(now - 1000).toISOString(),
+          called_at: new Date(now).toISOString(),
+          queue_number: 1,
+          is_walkin: false,
+          is_billable: false,
+          queue_date: '2026-10-24',
+          customer_id: 'cust-b1',
+          barber_id: 'barber-A',
+          guest_name: null,
+          guest_phone: null,
+          qr_code_token: 'TOK-1',
+          checked_in_at: new Date(now).toISOString(),
+          completed_at: null,
+          updated_at: new Date(now).toISOString()
+        },
+        {
+          id: 'target-barber-B',
           shop_id: 'shop-1',
           service_id: 'svc-quick',
           status: 'waiting' as const,
-          created_at: new Date(now + 2000).toISOString(),
+          created_at: new Date(now + 1000).toISOString(),
+          called_at: null,
+          queue_number: 2,
+          is_walkin: false,
+          is_billable: false,
+          queue_date: '2026-10-24',
+          customer_id: 'cust-target-B',
+          barber_id: 'barber-B',
+          guest_name: null,
+          guest_phone: null,
+          qr_code_token: 'TOK-2',
+          checked_in_at: null,
+          completed_at: null,
+          updated_at: new Date(now + 1000).toISOString()
+        }
+      ];
+
+      const calc = calculateEstimatedWaitTime({
+        targetEntryId: 'target-barber-B',
+        queueEntries: entries,
+        servicesMap,
+        activeBarberIds: ['barber-A', 'barber-B'],
+        currentTime: now
+      });
+
+      // Barber B has 0 mins in line
+      assert.strictEqual(calc.estimatedMinutes, 0, 'Target requesting free Barber B has 0 min wait');
+    });
+
+    // 15d. Unassigned customer takes earliest available barber
+    await suite.test('15d. Unassigned customer takes earliest available barber among parallel servers', () => {
+      const now = Date.now();
+      const entries = [
+        {
+          id: 'b1-busy-25',
+          shop_id: 'shop-1',
+          service_id: 'svc-standard', // 25m
+          status: 'in_service' as const,
+          created_at: new Date(now - 1000).toISOString(),
+          called_at: new Date(now).toISOString(),
+          queue_number: 1,
+          is_walkin: false,
+          is_billable: false,
+          queue_date: '2026-10-24',
+          customer_id: 'c1',
+          barber_id: 'barber-A',
+          guest_name: null,
+          guest_phone: null,
+          qr_code_token: 'T1',
+          checked_in_at: new Date(now).toISOString(),
+          completed_at: null,
+          updated_at: new Date(now).toISOString()
+        },
+        {
+          id: 'b2-busy-10',
+          shop_id: 'shop-1',
+          service_id: 'svc-quick', // 10m
+          status: 'in_service' as const,
+          created_at: new Date(now - 1000).toISOString(),
+          called_at: new Date(now).toISOString(),
+          queue_number: 2,
+          is_walkin: false,
+          is_billable: false,
+          queue_date: '2026-10-24',
+          customer_id: 'c2',
+          barber_id: 'barber-B',
+          guest_name: null,
+          guest_phone: null,
+          qr_code_token: 'T2',
+          checked_in_at: new Date(now).toISOString(),
+          completed_at: null,
+          updated_at: new Date(now).toISOString()
+        },
+        {
+          id: 'target-unassigned-d',
+          shop_id: 'shop-1',
+          service_id: 'svc-standard',
+          status: 'waiting' as const,
+          created_at: new Date(now + 1000).toISOString(),
+          called_at: null,
+          queue_number: 3,
+          is_walkin: false,
+          is_billable: false,
+          queue_date: '2026-10-24',
+          customer_id: 'c3',
+          barber_id: null,
+          guest_name: null,
+          guest_phone: null,
+          qr_code_token: 'T3',
+          checked_in_at: null,
+          completed_at: null,
+          updated_at: new Date(now + 1000).toISOString()
+        }
+      ];
+
+      const calc = calculateEstimatedWaitTime({
+        targetEntryId: 'target-unassigned-d',
+        queueEntries: entries,
+        servicesMap,
+        activeBarberIds: ['barber-A', 'barber-B'],
+        currentTime: now
+      });
+
+      // Barber A = 25m, Barber B = 10m. Min = 10m (Barber B is free first)
+      assert.strictEqual(calc.estimatedMinutes, 10, 'Unassigned customer wait is 10 mins (earliest available server)');
+    });
+
+    // 15e. Multiple unassigned customers dispatched greedily
+    await suite.test('15e. Multiple unassigned customers dispatched greedily', () => {
+      const now = Date.now();
+      const entries = [
+        // Barber A in-chair: 25 mins
+        {
+          id: 'bA-chair',
+          shop_id: 'shop-1',
+          service_id: 'svc-standard',
+          status: 'in_service' as const,
+          created_at: new Date(now - 1000).toISOString(),
+          called_at: new Date(now).toISOString(),
+          queue_number: 1,
+          is_walkin: false,
+          is_billable: false,
+          queue_date: '2026-10-24',
+          customer_id: 'c1',
+          barber_id: 'barber-A',
+          guest_name: null,
+          guest_phone: null,
+          qr_code_token: 'T1',
+          checked_in_at: new Date(now).toISOString(),
+          completed_at: null,
+          updated_at: new Date(now).toISOString()
+        },
+        // Barber B in-chair: 10 mins
+        {
+          id: 'bB-chair',
+          shop_id: 'shop-1',
+          service_id: 'svc-quick',
+          status: 'in_service' as const,
+          created_at: new Date(now - 1000).toISOString(),
+          called_at: new Date(now).toISOString(),
+          queue_number: 2,
+          is_walkin: false,
+          is_billable: false,
+          queue_date: '2026-10-24',
+          customer_id: 'c2',
+          barber_id: 'barber-B',
+          guest_name: null,
+          guest_phone: null,
+          qr_code_token: 'T2',
+          checked_in_at: new Date(now).toISOString(),
+          completed_at: null,
+          updated_at: new Date(now).toISOString()
+        },
+        // Unassigned customer 1 ahead: 15 mins beard -> Dispatched to Barber B (10 + 15 = 25m)
+        {
+          id: 'unassigned-1',
+          shop_id: 'shop-1',
+          service_id: 'svc-beard',
+          status: 'waiting' as const,
+          created_at: new Date(now + 100).toISOString(),
+          called_at: null,
+          queue_number: 3,
+          is_walkin: false,
+          is_billable: false,
+          queue_date: '2026-10-24',
+          customer_id: 'c3',
+          barber_id: null,
+          guest_name: null,
+          guest_phone: null,
+          qr_code_token: 'T3',
+          checked_in_at: null,
+          completed_at: null,
+          updated_at: new Date(now + 100).toISOString()
+        },
+        // Target unassigned: Next free chair is either Barber A (25m) or Barber B (25m) -> 25 mins
+        {
+          id: 'target-e',
+          shop_id: 'shop-1',
+          service_id: 'svc-quick',
+          status: 'waiting' as const,
+          created_at: new Date(now + 200).toISOString(),
           called_at: null,
           queue_number: 4,
           is_walkin: false,
           is_billable: false,
           queue_date: '2026-10-24',
-          customer_id: 'cust-target',
+          customer_id: 'c4',
           barber_id: null,
           guest_name: null,
           guest_phone: null,
-          qr_code_token: 'TOK-4',
+          qr_code_token: 'T4',
           checked_in_at: null,
           completed_at: null,
-          updated_at: new Date(now + 2000).toISOString()
+          updated_at: new Date(now + 200).toISOString()
         }
       ];
 
       const calc = calculateEstimatedWaitTime({
-        targetEntryId: 'target-entry',
+        targetEntryId: 'target-e',
         queueEntries: entries,
         servicesMap,
-        activeBarberCount: 2,
+        activeBarberIds: ['barber-A', 'barber-B'],
         currentTime: now
       });
-      // Barber 1 finishes at min 25; Barber 2 finishes at min 10 + 15 = 25. Min = 25.
-      assert.strictEqual(calc.estimatedMinutes, 25, 'Unassigned customer wait accounts for greedy dispatch of preceding waiting cut');
-      assert.strictEqual(calc.isEstimate, true);
+
+      assert.strictEqual(calc.estimatedMinutes, 25, 'Greedy dispatch accurately computes 25 mins for next customer in line');
+    });
+
+    // 15f. Elapsed in-chair service deduction
+    await suite.test('15f. Elapsed in-chair service deduction (called_at elapsed minutes subtracted)', () => {
+      const now = Date.now();
+      // Started 15 minutes ago on a 25 min service -> 10 minutes remaining
+      const calledAt = new Date(now - 15 * 60 * 1000).toISOString();
+      const entries = [
+        {
+          id: 'bA-in-progress',
+          shop_id: 'shop-1',
+          service_id: 'svc-standard', // 25 mins
+          status: 'in_service' as const,
+          created_at: new Date(now - 20 * 60 * 1000).toISOString(),
+          called_at: calledAt,
+          queue_number: 1,
+          is_walkin: false,
+          is_billable: false,
+          queue_date: '2026-10-24',
+          customer_id: 'c1',
+          barber_id: 'barber-A',
+          guest_name: null,
+          guest_phone: null,
+          qr_code_token: 'T1',
+          checked_in_at: calledAt,
+          completed_at: null,
+          updated_at: calledAt
+        },
+        {
+          id: 'target-f',
+          shop_id: 'shop-1',
+          service_id: 'svc-standard',
+          status: 'waiting' as const,
+          created_at: new Date(now).toISOString(),
+          called_at: null,
+          queue_number: 2,
+          is_walkin: false,
+          is_billable: false,
+          queue_date: '2026-10-24',
+          customer_id: 'c2',
+          barber_id: 'barber-A',
+          guest_name: null,
+          guest_phone: null,
+          qr_code_token: 'T2',
+          checked_in_at: null,
+          completed_at: null,
+          updated_at: new Date(now).toISOString()
+        }
+      ];
+
+      const calc = calculateEstimatedWaitTime({
+        targetEntryId: 'target-f',
+        queueEntries: entries,
+        servicesMap,
+        activeBarberIds: ['barber-A'],
+        currentTime: now
+      });
+
+      // 25m duration - 15m elapsed = 10m remaining
+      assert.strictEqual(calc.estimatedMinutes, 10, 'Elapsed 15 mins is deducted, leaving 10 mins remaining');
+    });
+
+    // 15g. Multiple service durations
+    await suite.test('15g. Multiple service durations accurately tracked', () => {
+      const now = Date.now();
+      const entries = [
+        {
+          id: 'bA-service-40',
+          shop_id: 'shop-1',
+          service_id: 'svc-long', // 40m
+          status: 'in_service' as const,
+          created_at: new Date(now).toISOString(),
+          called_at: new Date(now).toISOString(),
+          queue_number: 1,
+          is_walkin: false,
+          is_billable: false,
+          queue_date: '2026-10-24',
+          customer_id: 'c1',
+          barber_id: 'barber-A',
+          guest_name: null,
+          guest_phone: null,
+          qr_code_token: 'T1',
+          checked_in_at: new Date(now).toISOString(),
+          completed_at: null,
+          updated_at: new Date(now).toISOString()
+        },
+        {
+          id: 'target-g',
+          shop_id: 'shop-1',
+          service_id: 'svc-standard',
+          status: 'waiting' as const,
+          created_at: new Date(now + 100).toISOString(),
+          called_at: null,
+          queue_number: 2,
+          is_walkin: false,
+          is_billable: false,
+          queue_date: '2026-10-24',
+          customer_id: 'c2',
+          barber_id: 'barber-A',
+          guest_name: null,
+          guest_phone: null,
+          qr_code_token: 'T2',
+          checked_in_at: null,
+          completed_at: null,
+          updated_at: new Date(now + 100).toISOString()
+        }
+      ];
+
+      const calc = calculateEstimatedWaitTime({
+        targetEntryId: 'target-g',
+        queueEntries: entries,
+        servicesMap,
+        activeBarberIds: ['barber-A'],
+        currentTime: now
+      });
+
+      assert.strictEqual(calc.estimatedMinutes, 40, 'Target waits full 40 mins for long service');
+    });
+
+    // 15h. Three active barber timelines
+    await suite.test('15h. Three active barber timelines dispatch across 3 parallel servers', () => {
+      const now = Date.now();
+      const entries = [
+        {
+          id: 'b1-chair-h',
+          shop_id: 'shop-1',
+          service_id: 'svc-standard', // 25m
+          status: 'in_service' as const,
+          created_at: new Date(now).toISOString(),
+          called_at: new Date(now).toISOString(),
+          queue_number: 1,
+          is_walkin: false,
+          is_billable: false,
+          queue_date: '2026-10-24',
+          customer_id: 'c1',
+          barber_id: 'barber-1',
+          guest_name: null,
+          guest_phone: null,
+          qr_code_token: 'T1',
+          checked_in_at: new Date(now).toISOString(),
+          completed_at: null,
+          updated_at: new Date(now).toISOString()
+        },
+        {
+          id: 'b2-chair-h',
+          shop_id: 'shop-1',
+          service_id: 'svc-beard', // 15m
+          status: 'in_service' as const,
+          created_at: new Date(now).toISOString(),
+          called_at: new Date(now).toISOString(),
+          queue_number: 2,
+          is_walkin: false,
+          is_billable: false,
+          queue_date: '2026-10-24',
+          customer_id: 'c2',
+          barber_id: 'barber-2',
+          guest_name: null,
+          guest_phone: null,
+          qr_code_token: 'T2',
+          checked_in_at: new Date(now).toISOString(),
+          completed_at: null,
+          updated_at: new Date(now).toISOString()
+        },
+        {
+          id: 'b3-chair-h',
+          shop_id: 'shop-1',
+          service_id: 'svc-quick', // 10m
+          status: 'in_service' as const,
+          created_at: new Date(now).toISOString(),
+          called_at: new Date(now).toISOString(),
+          queue_number: 3,
+          is_walkin: false,
+          is_billable: false,
+          queue_date: '2026-10-24',
+          customer_id: 'c3',
+          barber_id: 'barber-3',
+          guest_name: null,
+          guest_phone: null,
+          qr_code_token: 'T3',
+          checked_in_at: new Date(now).toISOString(),
+          completed_at: null,
+          updated_at: new Date(now).toISOString()
+        },
+        {
+          id: 'target-h',
+          shop_id: 'shop-1',
+          service_id: 'svc-standard',
+          status: 'waiting' as const,
+          created_at: new Date(now + 100).toISOString(),
+          called_at: null,
+          queue_number: 4,
+          is_walkin: false,
+          is_billable: false,
+          queue_date: '2026-10-24',
+          customer_id: 'c4',
+          barber_id: null,
+          guest_name: null,
+          guest_phone: null,
+          qr_code_token: 'T4',
+          checked_in_at: null,
+          completed_at: null,
+          updated_at: new Date(now + 100).toISOString()
+        }
+      ];
+
+      const calc = calculateEstimatedWaitTime({
+        targetEntryId: 'target-h',
+        queueEntries: entries,
+        servicesMap,
+        activeBarberIds: ['barber-1', 'barber-2', 'barber-3'],
+        currentTime: now
+      });
+
+      // Timelines: b1 = 25m, b2 = 15m, b3 = 10m. Min = 10m (Barber 3).
+      assert.strictEqual(calc.estimatedMinutes, 10, 'Target routed to earliest of 3 servers (10 mins)');
+    });
+
+    // 15i. Zero active barbers
+    await suite.test('15i. Zero active barbers: returns -1 and safe disclaimer without throwing', () => {
+      const now = Date.now();
+      const entries = [
+        {
+          id: 'target-zero-barbers',
+          shop_id: 'shop-1',
+          service_id: 'svc-standard',
+          status: 'waiting' as const,
+          created_at: new Date(now).toISOString(),
+          called_at: null,
+          queue_number: 1,
+          is_walkin: false,
+          is_billable: false,
+          queue_date: '2026-10-24',
+          customer_id: 'c1',
+          barber_id: null,
+          guest_name: null,
+          guest_phone: null,
+          qr_code_token: 'T1',
+          checked_in_at: null,
+          completed_at: null,
+          updated_at: new Date(now).toISOString()
+        }
+      ];
+
+      const calc = calculateEstimatedWaitTime({
+        targetEntryId: 'target-zero-barbers',
+        queueEntries: entries,
+        servicesMap,
+        activeBarberCount: 0,
+        currentTime: now
+      });
+
+      assert.strictEqual(calc.estimatedMinutes, -1, 'Zero active barbers returns -1');
+      assert.strictEqual(formatEstimatedWaitDisplay(calc.estimatedMinutes), 'No active barbers available');
+    });
+
+    // 15j. Inactive barber handling
+    await suite.test('15j. Inactive barber handling: request for inactive barber routes to earliest active server', () => {
+      const now = Date.now();
+      const entries = [
+        // Barber 1 is active (15 mins)
+        {
+          id: 'b1-active',
+          shop_id: 'shop-1',
+          service_id: 'svc-beard', // 15m
+          status: 'in_service' as const,
+          created_at: new Date(now).toISOString(),
+          called_at: new Date(now).toISOString(),
+          queue_number: 1,
+          is_walkin: false,
+          is_billable: false,
+          queue_date: '2026-10-24',
+          customer_id: 'c1',
+          barber_id: 'barber-active-1',
+          guest_name: null,
+          guest_phone: null,
+          qr_code_token: 'T1',
+          checked_in_at: new Date(now).toISOString(),
+          completed_at: null,
+          updated_at: new Date(now).toISOString()
+        },
+        // Target requested 'barber-inactive-2' (who is not in activeBarberIds)
+        {
+          id: 'target-inactive-barber',
+          shop_id: 'shop-1',
+          service_id: 'svc-standard',
+          status: 'waiting' as const,
+          created_at: new Date(now + 100).toISOString(),
+          called_at: null,
+          queue_number: 2,
+          is_walkin: false,
+          is_billable: false,
+          queue_date: '2026-10-24',
+          customer_id: 'c2',
+          barber_id: 'barber-inactive-2',
+          guest_name: null,
+          guest_phone: null,
+          qr_code_token: 'T2',
+          checked_in_at: null,
+          completed_at: null,
+          updated_at: new Date(now + 100).toISOString()
+        }
+      ];
+
+      const calc = calculateEstimatedWaitTime({
+        targetEntryId: 'target-inactive-barber',
+        queueEntries: entries,
+        servicesMap,
+        activeBarberIds: ['barber-active-1'], // Only barber-1 is active
+        currentTime: now
+      });
+
+      // Target requested inactive barber, so gets served by active barber at min 15
+      assert.strictEqual(calc.estimatedMinutes, 15, 'Request for inactive barber safely falls back to earliest active server (15m)');
+    });
+
+    // 15k. Missing service duration
+    await suite.test('15k. Missing service duration safely defaults to 20 minutes', () => {
+      const now = Date.now();
+      const entries = [
+        {
+          id: 'b1-unknown-service',
+          shop_id: 'shop-1',
+          service_id: 'svc-unregistered',
+          status: 'in_service' as const,
+          created_at: new Date(now).toISOString(),
+          called_at: new Date(now).toISOString(),
+          queue_number: 1,
+          is_walkin: false,
+          is_billable: false,
+          queue_date: '2026-10-24',
+          customer_id: 'c1',
+          barber_id: 'barber-1',
+          guest_name: null,
+          guest_phone: null,
+          qr_code_token: 'T1',
+          checked_in_at: new Date(now).toISOString(),
+          completed_at: null,
+          updated_at: new Date(now).toISOString()
+        },
+        {
+          id: 'target-k',
+          shop_id: 'shop-1',
+          service_id: 'svc-standard',
+          status: 'waiting' as const,
+          created_at: new Date(now + 100).toISOString(),
+          called_at: null,
+          queue_number: 2,
+          is_walkin: false,
+          is_billable: false,
+          queue_date: '2026-10-24',
+          customer_id: 'c2',
+          barber_id: 'barber-1',
+          guest_name: null,
+          guest_phone: null,
+          qr_code_token: 'T2',
+          checked_in_at: null,
+          completed_at: null,
+          updated_at: new Date(now + 100).toISOString()
+        }
+      ];
+
+      const calc = calculateEstimatedWaitTime({
+        targetEntryId: 'target-k',
+        queueEntries: entries,
+        servicesMap: {}, // Empty services map
+        activeBarberIds: ['barber-1'],
+        currentTime: now
+      });
+
+      // Unregistered service defaults to 20 mins
+      assert.strictEqual(calc.estimatedMinutes, 20, 'Unregistered service defaults to 20 mins duration');
+    });
+
+    // 15l. FIFO ordering with equal timestamps
+    await suite.test('15l. FIFO ordering with equal timestamps: deterministic tie-break by queue_number / id', () => {
+      const now = Date.now();
+      const sameTime = new Date(now).toISOString();
+      const entries = [
+        // Barber in chair: 10 mins
+        {
+          id: 'b1-chair-l',
+          shop_id: 'shop-1',
+          service_id: 'svc-quick',
+          status: 'in_service' as const,
+          created_at: sameTime,
+          called_at: sameTime,
+          queue_number: 1,
+          is_walkin: false,
+          is_billable: false,
+          queue_date: '2026-10-24',
+          customer_id: 'c1',
+          barber_id: 'barber-1',
+          guest_name: null,
+          guest_phone: null,
+          qr_code_token: 'T1',
+          checked_in_at: sameTime,
+          completed_at: null,
+          updated_at: sameTime
+        },
+        // Waiting customer 2 (equal timestamp, lower queue_number): 15 mins
+        {
+          id: 'wait-2',
+          shop_id: 'shop-1',
+          service_id: 'svc-beard',
+          status: 'waiting' as const,
+          created_at: sameTime,
+          called_at: null,
+          queue_number: 2,
+          is_walkin: false,
+          is_billable: false,
+          queue_date: '2026-10-24',
+          customer_id: 'c2',
+          barber_id: 'barber-1',
+          guest_name: null,
+          guest_phone: null,
+          qr_code_token: 'T2',
+          checked_in_at: null,
+          completed_at: null,
+          updated_at: sameTime
+        },
+        // Target customer 3 (equal timestamp, higher queue_number)
+        {
+          id: 'wait-3-target',
+          shop_id: 'shop-1',
+          service_id: 'svc-standard',
+          status: 'waiting' as const,
+          created_at: sameTime,
+          called_at: null,
+          queue_number: 3,
+          is_walkin: false,
+          is_billable: false,
+          queue_date: '2026-10-24',
+          customer_id: 'c3',
+          barber_id: 'barber-1',
+          guest_name: null,
+          guest_phone: null,
+          qr_code_token: 'T3',
+          checked_in_at: null,
+          completed_at: null,
+          updated_at: sameTime
+        }
+      ];
+
+      const calc = calculateEstimatedWaitTime({
+        targetEntryId: 'wait-3-target',
+        queueEntries: entries,
+        servicesMap,
+        activeBarberIds: ['barber-1'],
+        currentTime: now
+      });
+
+      // In chair (10m) + wait-2 (15m) = 25 mins
+      assert.strictEqual(calc.estimatedMinutes, 25, 'Equal timestamps tie-broken by queue number: customer 2 served before customer 3');
+      assert.strictEqual(calc.peopleAhead, 2);
+    });
+
+    // 15m. Display formatting parity
+    await suite.test('15m. Wait-time display formatting parity across all ranges', () => {
+      assert.strictEqual(formatEstimatedWaitDisplay(-1), 'No active barbers available');
+      assert.strictEqual(formatEstimatedWaitDisplay(0), 'Ready next (Est. < 5 mins)');
+      assert.strictEqual(formatEstimatedWaitDisplay(25), '~25 mins (Est.)');
+      assert.strictEqual(formatEstimatedWaitDisplay(60), '~1h (Est.)');
+      assert.strictEqual(formatEstimatedWaitDisplay(90), '~1h 30m (Est.)');
+    });
+  });
+
+  // =========================================================================
+  // 16. Customer QR Self-Check-in Rejection & Authorization Matrix (Task 1)
+  // =========================================================================
+  await t.test('16. Customer QR Self-Check-in Rejection & Authorization Matrix', async (suite) => {
+    // Simulate verify_qr_checkin authorization rules
+    function simulateVerifyQRCheckIn(caller: { id: string; role: string; shop_id?: string }, entry: { id: string; shop_id: string; customer_id: string; token: string }, submittedToken: string) {
+      const isServiceRole = caller.role === 'service_role';
+      const isAdmin = caller.role === 'admin';
+      const isStaff = caller.role === 'staff' && caller.shop_id === entry.shop_id;
+      const isOwner = caller.role === 'owner' && caller.shop_id === entry.shop_id;
+
+      // STRICT AUTHORIZATION CHECK (Task 1)
+      // Customers are NEVER authorized to check in their own tickets
+      if (!isServiceRole && !isAdmin && !isStaff && !isOwner) {
+        throw new Error('Unauthorized: Only authorized shop staff, shop owners, or platform administrators can verify arrival check-in.');
+      }
+
+      // Exact token check (rejects queue numbers or mismatches)
+      if (submittedToken.trim() !== entry.token) {
+        throw new Error('Invalid check-in QR code or token. Cryptographic QR proof of arrival required.');
+      }
+
+      return { success: true, checked_in_at: new Date().toISOString() };
+    }
+
+    const testEntry = {
+      id: 'entry-test-101',
+      shop_id: 'shop-crown-a',
+      customer_id: 'cust-rahul-01',
+      token: 'crypto-token-uuid-1234'
+    };
+
+    // 16a. Customer calling check-in on own ticket with valid token -> REJECTED
+    await suite.test('16a. Authenticated customer CANNOT self-check-in, even with valid token', () => {
+      const customerCaller = { id: 'cust-rahul-01', role: 'customer' };
+      assert.throws(() => {
+        simulateVerifyQRCheckIn(customerCaller, testEntry, testEntry.token);
+      }, /Unauthorized: Only authorized shop staff/);
+    });
+
+    // 16b. Customer calling check-in on own ticket with invalid token -> REJECTED
+    await suite.test('16b. Customer calling check-in with invalid token is rejected', () => {
+      const customerCaller = { id: 'cust-rahul-01', role: 'customer' };
+      assert.throws(() => {
+        simulateVerifyQRCheckIn(customerCaller, testEntry, 'wrong-token');
+      }, /Unauthorized/);
+    });
+
+    // 16c. Customer calling check-in on another customer's ticket -> REJECTED
+    await suite.test('16c. Customer calling check-in on another customer ticket is rejected', () => {
+      const otherCustomer = { id: 'cust-other-99', role: 'customer' };
+      assert.throws(() => {
+        simulateVerifyQRCheckIn(otherCustomer, testEntry, testEntry.token);
+      }, /Unauthorized/);
+    });
+
+    // 16d. Staff of Shop A checking in Shop A ticket with correct token -> ALLOWED
+    await suite.test('16d. Staff of Shop A can verify check-in for Shop A ticket', () => {
+      const staffShopA = { id: 'staff-sam-01', role: 'staff', shop_id: 'shop-crown-a' };
+      const res = simulateVerifyQRCheckIn(staffShopA, testEntry, testEntry.token);
+      assert.strictEqual(res.success, true);
+    });
+
+    // 16e. Staff of Shop A checking in Shop B ticket -> REJECTED
+    await suite.test('16e. Staff of Shop A cannot check in Shop B ticket (cross-shop blocked)', () => {
+      const staffShopA = { id: 'staff-sam-01', role: 'staff', shop_id: 'shop-crown-a' };
+      const ticketShopB = { ...testEntry, shop_id: 'shop-blade-b' };
+      assert.throws(() => {
+        simulateVerifyQRCheckIn(staffShopA, ticketShopB, testEntry.token);
+      }, /Unauthorized/);
+    });
+
+    // 16f. Owner of Shop A checking in Shop A ticket -> ALLOWED
+    await suite.test('16f. Owner of Shop A can check in Shop A ticket', () => {
+      const ownerShopA = { id: 'owner-alex-01', role: 'owner', shop_id: 'shop-crown-a' };
+      const res = simulateVerifyQRCheckIn(ownerShopA, testEntry, testEntry.token);
+      assert.strictEqual(res.success, true);
+    });
+
+    // 16g. Owner of Shop A checking in Shop B ticket -> REJECTED
+    await suite.test('16g. Owner of Shop A cannot check in Shop B ticket', () => {
+      const ownerShopA = { id: 'owner-alex-01', role: 'owner', shop_id: 'shop-crown-a' };
+      const ticketShopB = { ...testEntry, shop_id: 'shop-blade-b' };
+      assert.throws(() => {
+        simulateVerifyQRCheckIn(ownerShopA, ticketShopB, testEntry.token);
+      }, /Unauthorized/);
+    });
+
+    // 16h. Platform administrator performing check-in -> ALLOWED
+    await suite.test('16h. Platform administrator can verify check-in', () => {
+      const adminCaller = { id: 'admin-001', role: 'admin' };
+      const res = simulateVerifyQRCheckIn(adminCaller, testEntry, testEntry.token);
+      assert.strictEqual(res.success, true);
+    });
+
+    // 16i. Anonymous caller -> REJECTED
+    await suite.test('16i. Anonymous caller is rejected', () => {
+      const anonCaller = { id: '', role: 'anon' };
+      assert.throws(() => {
+        simulateVerifyQRCheckIn(anonCaller, testEntry, testEntry.token);
+      }, /Unauthorized/);
+    });
+
+    // 16j. Rejects queue number as token
+    await suite.test('16j. Strictly rejects queue number as token', () => {
+      const staffShopA = { id: 'staff-sam-01', role: 'staff', shop_id: 'shop-crown-a' };
+      assert.throws(() => {
+        simulateVerifyQRCheckIn(staffShopA, testEntry, '3');
+      }, /Cryptographic QR proof of arrival required/);
+    });
+  });
+
+  // =========================================================================
+  // 17. Storage Bucket Security & RLS Policy Isolation (Task 7)
+  // =========================================================================
+  await t.test('17. Storage Bucket Security & RLS Policy Isolation', async (suite) => {
+    // Model storage RLS rules from migration 20261024000005
+    function evaluateStorageInsertPolicy(
+      caller: { uid: string | null; isAdmin?: boolean; ownedShopIds?: string[] },
+      bucketId: string,
+      objectPath: string,
+      mimeType: string,
+      sizeBytes: number
+    ) {
+      const ALLOWED_MIME = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+      const MAX_SIZE = 5 * 1024 * 1024; // 5 MB
+
+      if (!ALLOWED_MIME.includes(mimeType)) {
+        throw new Error(`File type ${mimeType} not allowed`);
+      }
+      if (sizeBytes > MAX_SIZE) {
+        throw new Error('File exceeds 5MB size limit');
+      }
+
+      const folderName = objectPath.split('/')[0];
+
+      if (bucketId === 'avatars') {
+        // avatars/{user_id}/*
+        if (caller.isAdmin) return true;
+        if (!caller.uid) throw new Error('Unauthorized storage write');
+        if (folderName !== caller.uid) {
+          throw new Error('User can only upload to their own avatar folder');
+        }
+        return true;
+      }
+
+      if (bucketId === 'shop-assets') {
+        // shop-assets/{shop_id}/*
+        if (caller.isAdmin) return true;
+        if (!caller.uid) throw new Error('Unauthorized storage write');
+        if (!caller.ownedShopIds || !caller.ownedShopIds.includes(folderName)) {
+          throw new Error('Only the verified owner of this shop can upload shop assets');
+        }
+        return true;
+      }
+
+      throw new Error('Unknown bucket');
+    }
+
+    // 17a. Customer A uploading to Customer B avatar folder -> REJECTED
+    await suite.test('17a. Customer A cannot upload to Customer B avatar folder', () => {
+      const callerA = { uid: 'user-A' };
+      assert.throws(() => {
+        evaluateStorageInsertPolicy(callerA, 'avatars', 'user-B/avatar.png', 'image/png', 50000);
+      }, /User can only upload to their own avatar folder/);
+    });
+
+    // 17b. Shop A owner uploading to Shop B folder -> REJECTED
+    await suite.test('17b. Shop A owner cannot upload to Shop B shop-assets folder', () => {
+      const ownerA = { uid: 'owner-A', ownedShopIds: ['shop-A'] };
+      assert.throws(() => {
+        evaluateStorageInsertPolicy(ownerA, 'shop-assets', 'shop-B/banner.jpg', 'image/jpeg', 100000);
+      }, /Only the verified owner of this shop/);
+    });
+
+    // 17c. Unauthenticated upload to avatars or shop-assets -> REJECTED
+    await suite.test('17c. Unauthenticated upload is rejected', () => {
+      const unauth = { uid: null };
+      assert.throws(() => {
+        evaluateStorageInsertPolicy(unauth, 'avatars', 'user-A/avatar.png', 'image/png', 50000);
+      }, /Unauthorized storage write/);
+      assert.throws(() => {
+        evaluateStorageInsertPolicy(unauth, 'shop-assets', 'shop-A/banner.jpg', 'image/jpeg', 50000);
+      }, /Unauthorized storage write/);
+    });
+
+    // 17d. Legitimate own-avatar upload -> ALLOWED
+    await suite.test('17d. User can upload to their own avatar folder', () => {
+      const callerA = { uid: 'user-A' };
+      const allowed = evaluateStorageInsertPolicy(callerA, 'avatars', 'user-A/photo.webp', 'image/webp', 80000);
+      assert.strictEqual(allowed, true);
+    });
+
+    // 17e. Legitimate own-shop upload -> ALLOWED
+    await suite.test('17e. Shop owner can upload to their own shop-assets folder', () => {
+      const ownerA = { uid: 'owner-A', ownedShopIds: ['shop-A'] };
+      const allowed = evaluateStorageInsertPolicy(ownerA, 'shop-assets', 'shop-A/storefront.png', 'image/png', 200000);
+      assert.strictEqual(allowed, true);
+    });
+
+    // 17f. File size and MIME type restrictions
+    await suite.test('17f. Storage rejects oversized files and invalid MIME types', () => {
+      const callerA = { uid: 'user-A' };
+      // Oversized (>5MB)
+      assert.throws(() => {
+        evaluateStorageInsertPolicy(callerA, 'avatars', 'user-A/huge.jpg', 'image/jpeg', 6 * 1024 * 1024);
+      }, /File exceeds 5MB size limit/);
+
+      // Disallowed MIME type (e.g. application/pdf)
+      assert.throws(() => {
+        evaluateStorageInsertPolicy(callerA, 'avatars', 'user-A/document.pdf', 'application/pdf', 50000);
+      }, /File type application\/pdf not allowed/);
     });
   });
 });
