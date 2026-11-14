@@ -6,7 +6,8 @@ import {
   TouchableOpacity,
   SafeAreaView,
   Linking,
-  ScrollView
+  ScrollView,
+  Platform
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import CustomerApp from './apps/customer/App';
