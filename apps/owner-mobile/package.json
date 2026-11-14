@@ -1,0 +1,28 @@
+{
+  "name": "@quickcut/owner-mobile",
+  "version": "1.0.0",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "start": "expo start --port 8084 --lan",
+    "start:lan": "expo start --port 8084 --lan",
+    "start:tunnel": "expo start --port 8084 --tunnel",
+    "android": "expo start --port 8084 --android",
+    "ios": "expo start --port 8084 --ios",
+    "web": "expo start --port 8084 --web"
+  },
+  "dependencies": {
+    "@quickcut/shared": "*",
+    "expo": "~58.0.25",
+    "expo-status-bar": "~58.0.5",
+    "react": "19.3.0",
+    "react-native": "0.88.1",
+    "react-native-safe-area-context": "~5.11.1"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.20.0",
+    "@types/react": "~19.3.0",
+    "typescript": "~6.0.3"
+  }
+}

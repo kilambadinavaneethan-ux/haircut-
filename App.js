@@ -12,6 +12,7 @@ import { StatusBar } from 'expo-status-bar';
 import CustomerApp from './apps/customer/App';
 import StaffApp from './apps/staff/App';
 import AdminMobileApp from './apps/admin-mobile/App';
+import OwnerMobileApp from './apps/owner-mobile/App';
 
 /**
  * QuickCut Monorepo Unified Root Entry Point
@@ -20,11 +21,13 @@ import AdminMobileApp from './apps/admin-mobile/App';
  * - 📱 Customer App (apps/customer)
  * - 💈 Staff App (apps/staff)
  * - 👑 Admin Mobile App (apps/admin-mobile)
+ * - 🏪 Owner Mobile App (apps/owner-mobile)
  *
  * To launch any app directly without this selector:
  *   npm run customer   (or npm run dev:customer)
  *   npm run staff      (or npm run dev:staff)
  *   npm run admin      (or npm run dev:admin:mobile)
+ *   npm run owner      (or npm run dev:owner:mobile)
  */
 export default function RootMonorepoApp() {
   const target = process.env.EXPO_PUBLIC_APP_TARGET;
@@ -78,7 +81,23 @@ export default function RootMonorepoApp() {
     );
   }
 
-  // 4. Clean App Selector (Shown when root `expo start` is run without target)
+  // 4. Standalone Owner Mobile App (100% full screen, zero switcher tabs)
+  if (selectedApp === 'owner') {
+    return (
+      <View style={styles.fullScreenWrapper}>
+        <OwnerMobileApp />
+        <TouchableOpacity
+          style={styles.exitPill}
+          onPress={() => setSelectedApp(null)}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.exitPillText}>⎋ Switch App</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  // 5. Clean App Selector (Shown when root `expo start` is run without target)
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar style="light" />
@@ -150,13 +169,33 @@ export default function RootMonorepoApp() {
           </View>
         </TouchableOpacity>
 
+        {/* Option 4: Owner Mobile App */}
+        <TouchableOpacity
+          style={styles.appCard}
+          onPress={() => setSelectedApp('owner')}
+          activeOpacity={0.85}
+        >
+          <View style={[styles.iconCircle, { borderColor: '#60A5FA' }]}>
+            <Text style={styles.cardEmoji}>🏪</Text>
+          </View>
+          <View style={styles.cardDetails}>
+            <Text style={styles.cardTitle}>Shop Owner Mobile App</Text>
+            <Text style={styles.cardDesc}>
+              Monitor live shop queue, add services & pricing, and track 100% of revenue.
+            </Text>
+            <View style={styles.badgeRow}>
+              <Text style={[styles.badgeStaff, { color: '#60A5FA' }]}>Separate Owner App</Text>
+            </View>
+          </View>
+        </TouchableOpacity>
+
         {/* Terminal Commands Guide */}
         <View style={styles.terminalBox}>
           <Text style={styles.terminalTitle}>💻 Run Separately From Terminal:</Text>
           <Text style={styles.terminalCode}>npm run customer  # Customer App (Port 8081)</Text>
           <Text style={styles.terminalCode}>npm run staff     # Staff Barber App (Port 8082)</Text>
           <Text style={styles.terminalCode}>npm run admin     # Admin Mobile App (Port 8083)</Text>
-          <Text style={styles.terminalCode}>npm run dev:admin # Admin Web Portal (Port 3002)</Text>
+          <Text style={styles.terminalCode}>npm run owner     # Owner Mobile App (Port 8084)</Text>
         </View>
       </ScrollView>
     </SafeAreaView>
