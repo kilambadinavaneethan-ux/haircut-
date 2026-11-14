@@ -69,25 +69,13 @@ export default function AnomalyFraudWatch({
             patternType: 'RAPID_COMPLETION',
             severity: 'CRITICAL',
             durationSeconds: durationSec,
-            description: `Completed only ${durationSec}s after QR check-in. Unrealistic haircut duration indicates artificial billing inflation.`
+            description: `Completed only ${durationSec}s after QR check-in. Unrealistic haircut duration indicates artificial service closing.`
           });
         }
       }
-
-      // 2. Invariant Check: Billable marked true without QR check-in
-      if (entry.is_billable && !entry.checked_in_at) {
-        anomalies.push({
-          id: `invariant-${entry.id}`,
-          entry,
-          shopName: getShopName(entry.shop_id),
-          patternType: 'INVARIANT_VIOLATION',
-          severity: 'CRITICAL',
-          description: 'Entry marked billable without customer QR check-in timestamp. Violates core platform billing invariant.'
-        });
-      }
     }
 
-    // 3. Burst Completion Detection: multiple completions within 120s by same shop
+    // 2. Burst Completion Detection: multiple completions within 120s by same shop
     const sortedByTime = [...completed].sort(
       (a, b) => new Date(a.completed_at || a.updated_at).getTime() - new Date(b.completed_at || b.updated_at).getTime()
     );
@@ -133,38 +121,6 @@ export default function AnomalyFraudWatch({
   };
 
   const flaggedList = detectAnomalies();
-
-  const handleInvalidateBillable = async (anomaly: FlaggedAnomaly) => {
-    setLoadingId(anomaly.id);
-    try {
-      const { error } = await (supabase.from('queue_entries') as any)
-        .update({
-          is_billable: false,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', anomaly.entry.id);
-
-      if (error) throw error;
-
-      await logAdminAction(adminId, 'FRAUD_ENTRY_INVALIDATED', 'queue_entries', anomaly.entry.id, {
-        shop_name: anomaly.shopName,
-        pattern_type: anomaly.patternType,
-        reason: anomaly.description
-      });
-
-      onQueueEntryUpdated({
-        ...anomaly.entry,
-        is_billable: false,
-        updated_at: new Date().toISOString()
-      });
-
-      setDismissedIds((prev) => [...prev, anomaly.id]);
-    } catch (err: any) {
-      alert(`Failed to invalidate entry: ${err.message}`);
-    } finally {
-      setLoadingId(null);
-    }
-  };
 
   const handleDismiss = async (anomaly: FlaggedAnomaly) => {
     setDismissedIds((prev) => [...prev, anomaly.id]);
@@ -257,8 +213,7 @@ export default function AnomalyFraudWatch({
                   <h3 style={{ fontSize: 16, fontWeight: 800 }}>{anomaly.shopName}</h3>
                   <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 4 }}>
                     Customer: {getCustomerName(anomaly.entry)} • Current Status:{' '}
-                    <span className={`badge badge-${anomaly.entry.status}`}>{anomaly.entry.status}</span> •
-                    Billable: {anomaly.entry.is_billable ? '₹5.00 INR' : 'Exempt'}
+                    <span className={`badge badge-${anomaly.entry.status}`}>{anomaly.entry.status}</span>
                   </p>
 
                   <div
@@ -278,23 +233,6 @@ export default function AnomalyFraudWatch({
 
                 {/* Actions */}
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  {anomaly.entry.is_billable && (
-                    <button
-                      disabled={loadingId === anomaly.id}
-                      onClick={() => handleInvalidateBillable(anomaly)}
-                      style={{
-                        background: 'var(--accent-rose)',
-                        color: '#FFFFFF',
-                        padding: '8px 14px',
-                        borderRadius: 6,
-                        fontWeight: 700,
-                        fontSize: 12
-                      }}
-                    >
-                      {loadingId === anomaly.id ? 'Updating...' : 'Invalidate Billable (₹0)'}
-                    </button>
-                  )}
-
                   <button
                     onClick={() => onSuspendShopRequest(anomaly.entry.shop_id)}
                     style={{

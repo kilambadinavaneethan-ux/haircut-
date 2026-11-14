@@ -66,13 +66,6 @@ export function AddWalkinModal({
             </TouchableOpacity>
           </View>
 
-          {/* Billing Exemption Notice */}
-          <View style={styles.infoBanner}>
-            <Text style={styles.infoBannerText}>
-              ℹ️ Walk-in guests are marked as <Text style={{ fontWeight: '800' }}>is_walkin: true</Text> and are <Text style={{ fontWeight: '800' }}>exempt</Text> from platform fees (₹0.00).
-            </Text>
-          </View>
-
           <Text style={styles.inputLabel}>Guest Name / Identifier</Text>
           <TextInput
             style={styles.textInput}

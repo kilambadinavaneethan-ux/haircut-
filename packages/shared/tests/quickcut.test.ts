@@ -17,11 +17,11 @@ import {
 test('QuickCut Test Suite - Core Business Rules, Security & Invariants', async (t) => {
   
   // =========================================================================
-  // 1. ₹5 Platform Billing Rule Invariants
+  // 1. Zero Platform Fee Rule Invariants (₹0 Platform Fee Policy)
   // =========================================================================
-  await t.test('1. Platform Billing Rules - Invariant Verification', () => {
+  await t.test('1. Platform Billing Rules - Zero Platform Fee Invariant', () => {
     // 1a. Eligible online customer with verified arrival QR check-in & completion
-    const validBillableEntry = {
+    const validEntry = {
       id: 'entry-1',
       shop_id: 'shop-1',
       customer_id: 'cust-1',
@@ -31,14 +31,14 @@ test('QuickCut Test Suite - Core Business Rules, Security & Invariants', async (
       status: 'completed' as const
     };
     assert.strictEqual(
-      isEntryBillable(validBillableEntry),
-      true,
-      'Online completed service with customer QR check-in must be billable'
+      isEntryBillable(validEntry),
+      false,
+      'Under zero-fee policy, online completed services generate ₹0 platform fee (never billable)'
     );
 
     // 1b. Walk-ins are strictly exempt (₹0 fee)
     const walkInEntry = {
-      ...validBillableEntry,
+      ...validEntry,
       is_walkin: true,
       customer_id: null,
       guest_name: 'Walk-in Guest'
@@ -46,83 +46,84 @@ test('QuickCut Test Suite - Core Business Rules, Security & Invariants', async (
     assert.strictEqual(
       isEntryBillable(walkInEntry),
       false,
-      'Walk-in services must remain exempt from platform fees'
+      'Walk-in services generate ₹0 platform fees'
     );
 
     // 1c. Online customer who never checked in via QR
     const noCheckInEntry = {
-      ...validBillableEntry,
+      ...validEntry,
       checked_in_at: null
     };
     assert.strictEqual(
       isEntryBillable(noCheckInEntry),
       false,
-      'Service completed without customer QR arrival verification must not be billable'
+      'Unverified services generate ₹0 platform fees'
     );
 
     // 1d. Cancelled service
     const cancelledEntry = {
-      ...validBillableEntry,
+      ...validEntry,
       status: 'cancelled' as const,
       completed_at: null
     };
     assert.strictEqual(
       isEntryBillable(cancelledEntry),
       false,
-      'Cancelled queue entries must not be billable'
+      'Cancelled queue entries generate ₹0 platform fees'
     );
 
     // 1e. No-show service
     const noShowEntry = {
-      ...validBillableEntry,
+      ...validEntry,
       status: 'no_show' as const,
       completed_at: null
     };
     assert.strictEqual(
       isEntryBillable(noShowEntry),
       false,
-      'No-show queue entries must not be billable'
+      'No-show queue entries generate ₹0 platform fees'
     );
   });
 
   // =========================================================================
-  // 2. Platform Fee Calculation & Invoicing Consistency
+  // 2. Platform Fee Calculation & Invoicing Consistency (₹0 Verification)
   // =========================================================================
-  await t.test('2. Fee Calculations & Dispute Windows', () => {
-    // 10 billable cuts @ ₹5
+  await t.test('2. Fee Calculations & Dispute Windows (₹0 Fee Policy)', () => {
+    // 10 completed cuts @ ₹0 platform fee
     const fee10 = calculatePlatformFee(10);
-    assert.strictEqual(fee10.count, 10);
-    assert.strictEqual(fee10.rate, 5.0);
-    assert.strictEqual(fee10.totalAmount, 50.0);
+    assert.strictEqual(fee10.count, 0);
+    assert.strictEqual(fee10.rate, 0.0);
+    assert.strictEqual(fee10.totalAmount, 0.0);
     assert.strictEqual(fee10.currency, 'INR');
 
-    // 0 billable cuts
+    // 0 cuts
     const fee0 = calculatePlatformFee(0);
     assert.strictEqual(fee0.totalAmount, 0.0);
+    assert.strictEqual(fee0.rate, 0.0);
 
     // Formatted currency display
-    assert.strictEqual(formatFeeAmount(50), 'Rs 50.00');
+    assert.strictEqual(formatFeeAmount(0), 'Rs 0.00');
 
-    // Dispute window logic
+    // Dispute window logic is deactivated under zero fee model
     const futureDate = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString();
     const pastDate = new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString();
 
     assert.strictEqual(
       isFeeDisputable({ status: 'pending', disputed_until: futureDate }),
-      true,
-      'Pending fee within active 7-day window must be disputable'
+      false,
+      'Under zero-fee policy, disputes are deactivated (₹0 fee)'
     );
 
     assert.strictEqual(
       isFeeDisputable({ status: 'pending', disputed_until: pastDate }),
       false,
-      'Pending fee past the dispute window must no longer be disputable'
+      'Disputes remain false'
     );
 
     assert.strictEqual(
       isFeeDisputable({ status: 'paid', disputed_until: futureDate }),
       false,
-      'Already settled/paid fee record cannot be disputed'
+      'Paid records remain false'
     );
   });
 
@@ -230,10 +231,19 @@ test('QuickCut Test Suite - Core Business Rules, Security & Invariants', async (
       servicesMap
     });
 
-    // 25 mins (in chair) + 15 mins (waiting ahead) = 40 mins
+    // 25 mins (in chair) + 15 mins (waiting ahead) = 40 mins (1 barber)
     assert.strictEqual(calculation.estimatedMinutes, 40, 'Should accurately sum services ahead (25 + 15 = 40)');
     assert.strictEqual(calculation.peopleAhead, 2, 'Should count exactly 2 customers ahead');
     assert.strictEqual(calculation.isEstimate, true, 'Result must be designated as an estimate');
+
+    // Multi-barber test: With 2 active barbers, 40 mins workload completes in ~20 mins
+    const multiBarberCalc = calculateEstimatedWaitTime({
+      targetEntryId: 'target-ticket',
+      queueEntries,
+      servicesMap,
+      activeBarberCount: 2
+    });
+    assert.strictEqual(multiBarberCalc.estimatedMinutes, 20, 'With 2 barbers, 40 mins workload completes in ~20 mins');
 
     // Display format tests
     assert.strictEqual(formatEstimatedWaitDisplay(0), 'Ready next (Est. < 5 mins)');
@@ -297,16 +307,16 @@ test('QuickCut Test Suite - Core Business Rules, Security & Invariants', async (
   });
 
   // =========================================================================
-  // 6. Repeatable Invoice Invariant Simulation
+  // 6. Zero Platform Fee Invoicing Invariant (₹0 Balance Protection)
   // =========================================================================
-  await t.test('6. Repeatable Invoice Generation (Paid Balance Protection)', () => {
+  await t.test('6. Repeatable Invoice Generation (Zero Fee Obligation)', () => {
     interface Invoice {
       id: string;
       shop_id: string;
       month: string;
       billable_count: number;
       amount: number;
-      status: 'pending' | 'paid';
+      status: 'pending' | 'waived';
     }
 
     const invoices = new Map<string, Invoice>();
@@ -315,36 +325,28 @@ test('QuickCut Test Suite - Core Business Rules, Security & Invariants', async (
       const key = `${shopId}-${month}`;
       const existing = invoices.get(key);
 
-      // Invariant: If invoice was already settled/paid, NEVER overwrite or corrupt
-      if (existing && existing.status === 'paid') {
-        return existing;
-      }
-
+      // Invariant: Platform fee is strictly ₹0.00
       const invoice: Invoice = {
         id: existing?.id || 'inv-' + Math.random().toString(36).slice(2, 9),
         shop_id: shopId,
         month,
-        billable_count: billableCount,
-        amount: billableCount * PLATFORM_CONFIG.BILLABLE_FEE_PER_SERVICE,
-        status: existing?.status || 'pending'
+        billable_count: 0,
+        amount: 0.0,
+        status: 'waived'
       };
 
       invoices.set(key, invoice);
       return invoice;
     }
 
-    // Month 1: 20 billable services -> ₹100 pending
+    // Month 1: Any number of completed services -> ₹0 fee balance
     const inv1 = generateInvoice('shop-1', '2026-10', 20);
-    assert.strictEqual(inv1.amount, 100);
-    assert.strictEqual(inv1.status, 'pending');
+    assert.strictEqual(inv1.amount, 0.0, 'Platform fee invoice amount must strictly be ₹0.00');
+    assert.strictEqual(inv1.status, 'waived', 'Fee obligation is waived/zero');
 
-    // Owner settles invoice
-    inv1.status = 'paid';
-
-    // Repeatable trigger executes again for the same month
+    // Repeated execution maintains zero balance
     const invRepeat = generateInvoice('shop-1', '2026-10', 25);
-    assert.strictEqual(invRepeat.status, 'paid', 'Paid status must be preserved');
-    assert.strictEqual(invRepeat.amount, 100, 'Paid amount must not be altered');
+    assert.strictEqual(invRepeat.amount, 0.0, 'Zero fee invariant is strictly preserved');
   });
 
   // =========================================================================
@@ -639,44 +641,47 @@ test('QuickCut Test Suite - Core Business Rules, Security & Invariants', async (
   });
 
   // =========================================================================
-  // 11. Multi-Ticket Platform Billing Tests (₹5, ₹50, ₹0)
+  // 11. Multi-Ticket Platform Billing Tests (₹0.00 Fixed Platform Fee Invariant)
   // =========================================================================
-  await t.test('11. Comprehensive Platform Billing & Invoice Calculations', () => {
-    // 1 eligible service -> ₹5.00
+  await t.test('11. Comprehensive Platform Billing & Invoice Calculations (Zero-Fee Invariant)', () => {
+    // 1 completed service -> ₹0.00 platform fee
     const fee1 = calculatePlatformFee(1);
-    assert.strictEqual(fee1.totalAmount, 5.0);
+    assert.strictEqual(fee1.totalAmount, 0.0);
+    assert.strictEqual(fee1.rate, 0.0);
 
-    // 10 eligible services -> ₹50.00
+    // 10 completed services -> ₹0.00 platform fee
     const fee10 = calculatePlatformFee(10);
-    assert.strictEqual(fee10.totalAmount, 50.0);
+    assert.strictEqual(fee10.totalAmount, 0.0);
+    assert.strictEqual(fee10.rate, 0.0);
 
-    // 100 eligible services -> ₹500.00
+    // 100 completed services -> ₹0.00 platform fee
     const fee100 = calculatePlatformFee(100);
-    assert.strictEqual(fee100.totalAmount, 500.0);
+    assert.strictEqual(fee100.totalAmount, 0.0);
+    assert.strictEqual(fee100.rate, 0.0);
 
-    // Mix of 5 online billable cuts, 3 walk-ins, 2 no-shows, 1 online without QR check-in
+    // Mix of 5 online cuts, 3 walk-ins, 2 no-shows, 1 online without QR check-in
     const serviceBatch = [
       { is_walkin: false, checked_in_at: '2026-10-23T10:00:00Z', completed_at: '2026-10-23T10:30:00Z', status: 'completed' as const },
       { is_walkin: false, checked_in_at: '2026-10-23T11:00:00Z', completed_at: '2026-10-23T11:30:00Z', status: 'completed' as const },
       { is_walkin: false, checked_in_at: '2026-10-23T12:00:00Z', completed_at: '2026-10-23T12:30:00Z', status: 'completed' as const },
       { is_walkin: false, checked_in_at: '2026-10-23T13:00:00Z', completed_at: '2026-10-23T13:30:00Z', status: 'completed' as const },
       { is_walkin: false, checked_in_at: '2026-10-23T14:00:00Z', completed_at: '2026-10-23T14:30:00Z', status: 'completed' as const },
-      // 3 walk-ins (exempt)
+      // 3 walk-ins
       { is_walkin: true, checked_in_at: '2026-10-23T10:15:00Z', completed_at: '2026-10-23T10:45:00Z', status: 'completed' as const },
       { is_walkin: true, checked_in_at: '2026-10-23T11:15:00Z', completed_at: '2026-10-23T11:45:00Z', status: 'completed' as const },
       { is_walkin: true, checked_in_at: '2026-10-23T12:15:00Z', completed_at: '2026-10-23T12:45:00Z', status: 'completed' as const },
-      // 2 no-shows (exempt)
+      // 2 no-shows
       { is_walkin: false, checked_in_at: null, completed_at: null, status: 'no_show' as const },
       { is_walkin: false, checked_in_at: null, completed_at: null, status: 'no_show' as const },
-      // 1 online booking without verified QR check-in (exempt)
+      // 1 online booking without verified QR check-in
       { is_walkin: false, checked_in_at: null, completed_at: '2026-10-23T15:00:00Z', status: 'completed' as const }
     ];
 
     const billableCount = serviceBatch.filter((entry) => isEntryBillable(entry as any)).length;
-    assert.strictEqual(billableCount, 5, 'Exactly 5 of the 11 entries should be billable');
+    assert.strictEqual(billableCount, 0, 'Under zero-fee rule, exactly 0 entries are billable');
 
     const totalFee = calculatePlatformFee(billableCount);
-    assert.strictEqual(totalFee.totalAmount, 25.0, '5 billable entries * ₹5 = ₹25.00');
+    assert.strictEqual(totalFee.totalAmount, 0.0, 'Platform fee obligation is strictly ₹0.00');
 
     // Strict YYYY-MM validation check
     const validMonthRegex = /^[0-9]{4}-(0[1-9]|1[0-2])$/;

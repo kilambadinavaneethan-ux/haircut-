@@ -6,8 +6,6 @@ interface PlatformSettingsProps {
 }
 
 export default function PlatformSettings({ adminId }: PlatformSettingsProps) {
-  const [feePerService, setFeePerService] = useState<number>(5.0);
-  const [disputeWindowDays, setDisputeWindowDays] = useState<number>(7);
   const [anomalyThresholdSeconds, setAnomalyThresholdSeconds] = useState<number>(60);
   const [maintenanceMode, setMaintenanceMode] = useState<boolean>(false);
   const [savedSuccess, setSavedSuccess] = useState<boolean>(false);
@@ -20,8 +18,7 @@ export default function PlatformSettings({ adminId }: PlatformSettingsProps) {
 
     try {
       const payload = {
-        rate_per_billable_cut: feePerService,
-        dispute_window_days: disputeWindowDays,
+        rate_per_billable_cut: 0.0,
         anomaly_threshold_seconds: anomalyThresholdSeconds,
         maintenance_mode: maintenanceMode,
         updated_at: new Date().toISOString()
@@ -45,9 +42,9 @@ export default function PlatformSettings({ adminId }: PlatformSettingsProps) {
   return (
     <div>
       <div style={{ marginBottom: 20 }}>
-        <h2 style={{ fontSize: 20, fontWeight: 800 }}>Platform Configuration & Economic Policy</h2>
+        <h2 style={{ fontSize: 20, fontWeight: 800 }}>Platform Configuration & Operational Policy</h2>
         <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-          Manage global unit economics, dispute windows, and fraud sensitivity parameters.
+          Manage global queue thresholds, system maintenance status, and operational parameters.
         </p>
       </div>
 
@@ -60,45 +57,6 @@ export default function PlatformSettings({ adminId }: PlatformSettingsProps) {
 
       <div className="glass-panel" style={{ maxWidth: 680 }}>
         <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-          {/* Unit Pricing */}
-          <div>
-            <label style={{ display: 'block', fontSize: 13, fontWeight: 700, marginBottom: 6 }}>
-              Platform Fee Per Verified Billable Cut (₹ INR)
-            </label>
-            <input
-              type="number"
-              step="0.5"
-              min="0"
-              max="50"
-              required
-              value={feePerService}
-              onChange={(e) => setFeePerService(parseFloat(e.target.value) || 0)}
-              style={{ width: '100%', maxWidth: 280 }}
-            />
-            <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
-              Fixed charge invoiced to shop owners per completed customer cut verified by QR check-in.
-            </p>
-          </div>
-
-          {/* Dispute Window */}
-          <div>
-            <label style={{ display: 'block', fontSize: 13, fontWeight: 700, marginBottom: 6 }}>
-              Merchant Dispute Window (Days)
-            </label>
-            <input
-              type="number"
-              min="1"
-              max="30"
-              required
-              value={disputeWindowDays}
-              onChange={(e) => setDisputeWindowDays(parseInt(e.target.value, 10) || 7)}
-              style={{ width: '100%', maxWidth: 280 }}
-            />
-            <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
-              Number of days barbershop owners have to submit dispute contestations on monthly fee invoices.
-            </p>
-          </div>
-
           {/* Fraud Threshold */}
           <div>
             <label style={{ display: 'block', fontSize: 13, fontWeight: 700, marginBottom: 6 }}>
@@ -114,7 +72,7 @@ export default function PlatformSettings({ adminId }: PlatformSettingsProps) {
               style={{ width: '100%', maxWidth: 280 }}
             />
             <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
-              Cuts completed faster than this threshold trigger automated fraud alerts on the Watchdog dashboard.
+              Cuts completed faster than this threshold trigger automated alerts on the Watchdog dashboard.
             </p>
           </div>
 

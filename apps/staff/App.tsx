@@ -228,7 +228,7 @@ export default function StaffApp() {
     }
   };
 
-  // Action: Complete Service (With Check-in & Billing Invariant Warning)
+  // Action: Complete Service
   const handleCompleteService = (entry: QueueEntryWithDetails) => {
     const isCheckedIn = !!entry.checked_in_at;
     const isOnlineCustomer = !entry.is_walkin;
@@ -236,17 +236,11 @@ export default function StaffApp() {
     const performComplete = async () => {
       try {
         // 1. Execute authoritative server-side completion RPC
-        let isBillable = false;
-        let feeInr = 0.0;
-
-        const { data: rpcData, error: rpcError } = await (supabase.rpc as any)('complete_service_atomic', {
+        const { error: rpcError } = await (supabase.rpc as any)('complete_service_atomic', {
           p_entry_id: entry.id
         });
 
-        if (!rpcError && rpcData) {
-          isBillable = !!rpcData.is_billable;
-          feeInr = typeof rpcData.platform_fee_inr === 'number' ? rpcData.platform_fee_inr : (isBillable ? 5.0 : 0.0);
-        } else {
+        if (rpcError) {
           // Fallback direct update
           const completionTime = new Date().toISOString();
           const { error } = await (supabase.from('queue_entries') as any)
@@ -257,29 +251,17 @@ export default function StaffApp() {
             .eq('id', entry.id);
 
           if (error) throw error;
-          // Re-fetch entry to read authoritative is_billable calculated by database trigger
-          const { data: updatedEntry } = await (supabase.from('queue_entries') as any)
-            .select('is_billable')
-            .eq('id', entry.id)
-            .single();
-
-          isBillable = !!updatedEntry?.is_billable;
-          feeInr = isBillable ? 5.0 : 0.0;
         }
 
         await logAudit('SERVICE_COMPLETED', entry.id, {
           queue_number: entry.queue_number,
           is_walkin: entry.is_walkin,
-          has_checked_in: isCheckedIn,
-          is_billable: isBillable,
-          platform_fee_inr: feeInr
+          has_checked_in: isCheckedIn
         });
 
         Alert.alert(
           'Service Completed',
-          `Ticket #${entry.queue_number} completed.\n\nPlatform Fee: ${
-            isBillable ? `₹${feeInr.toFixed(2)} (Billable completion)` : '₹0.00 (Exempt: Walk-in or no QR check-in)'
-          }`
+          `Ticket #${entry.queue_number} completed.`
         );
 
         await loadTodayQueue();
@@ -289,11 +271,11 @@ export default function StaffApp() {
       }
     };
 
-    // Prominent Warning if completing online booking without QR arrival check-in
+    // Prompt if completing online booking without QR arrival check-in
     if (isOnlineCustomer && !isCheckedIn) {
       Alert.alert(
         '⚠️ Non-Checked-In Warning',
-        `This customer did NOT scan their QR check-in.\n\nUnder platform rules, this service will NOT qualify for billing (₹0.00 platform fee). Would you like to verify arrival check-in first?`,
+        'This customer did NOT scan their QR check-in. Would you like to verify arrival check-in first?',
         [
           {
             text: 'Verify QR Now',
@@ -303,7 +285,7 @@ export default function StaffApp() {
             }
           },
           {
-            text: 'Complete Anyway (Non-Billable)',
+            text: 'Complete Anyway',
             style: 'destructive',
             onPress: performComplete
           },
@@ -379,7 +361,7 @@ export default function StaffApp() {
     );
   };
 
-  // Action: Add Walk-in Guest (marked is_walkin: true, never billable)
+  // Action: Add Walk-in Guest
   const handleAddWalkin = async (guestName: string, serviceId: string) => {
     if (!assignedShop) return;
 
@@ -389,7 +371,7 @@ export default function StaffApp() {
         guest_name: `${guestName} (Walk-in)`,
         service_id: serviceId,
         is_walkin: true,
-        is_billable: false, // Never billable per prompt rule
+        is_billable: false,
         checked_in_at: new Date().toISOString(), // In-store arrival confirmed
         status: 'waiting'
       })

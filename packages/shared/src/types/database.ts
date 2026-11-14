@@ -402,6 +402,16 @@ export interface Database {
       };
     };
     Functions: {
+      get_shops_queue_summary: {
+        Args: Record<PropertyKey, never>;
+        Returns: {
+          shop_id: string;
+          waiting_count: number;
+          in_service_count: number;
+          active_barbers_count: number;
+          estimated_wait_minutes: number;
+        }[];
+      };
       get_estimated_wait_time: {
         Args: {
           target_queue_entry_id: string;

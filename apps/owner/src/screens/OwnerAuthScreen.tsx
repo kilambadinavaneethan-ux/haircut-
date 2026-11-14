@@ -242,25 +242,27 @@ export function OwnerAuthScreen({ onAuthSuccess }: OwnerAuthScreenProps) {
           </div>
         </div>
 
-        {/* Quick Fill Test Account */}
-        <div style={{ marginTop: 20, textAlign: 'center' }}>
-          <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>Test Seed Account:</p>
-          <button
-            type="button"
-            onClick={fillSeedOwner}
-            style={{
-              background: '#131B2E',
-              border: '1px solid var(--border-color)',
-              color: 'var(--accent-gold)',
-              padding: '8px 16px',
-              borderRadius: 8,
-              fontSize: 13,
-              fontWeight: 600
-            }}
-          >
-            Fill Alex Miller (Owner of Crown & Blade)
-          </button>
-        </div>
+        {/* Quick Fill Test Account (Development Only) */}
+        {import.meta.env.DEV && (
+          <div style={{ marginTop: 20, textAlign: 'center' }}>
+            <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>Test Seed Account:</p>
+            <button
+              type="button"
+              onClick={fillSeedOwner}
+              style={{
+                background: '#131B2E',
+                border: '1px solid var(--border-color)',
+                color: 'var(--accent-gold)',
+                padding: '8px 16px',
+                borderRadius: 8,
+                fontSize: 13,
+                fontWeight: 600
+              }}
+            >
+              Fill Alex Miller (Owner of Crown & Blade)
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

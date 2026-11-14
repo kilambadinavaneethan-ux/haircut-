@@ -37,9 +37,9 @@ QuickCut is a multi-platform barber shop queue management monorepo designed to e
 | **`barbers`** | Barber stations / personnel roster per shop |
 | **`services`** | Haircut & grooming services (`name`, `price`, `avg_minutes`, `is_active`) |
 | **`queue_entries`** | Live queue tickets (`waiting`, `in_service`, `completed`, `cancelled`, `no_show`) |
-| **`fee_records`** | Monthly platform billing statements (`shop_id`, `month`, `amount`, `status`, `disputed_until`) |
-| **`payments`** | Platform fee settlement records (UPI, cards, transaction refs) |
-| **`notifications`** | Real-time user queue & billing alerts |
+| **`fee_records`** | Historical fee records table (deactivated under zero-fee platform model) |
+| **`payments`** | Payment transaction history table |
+| **`notifications`** | Real-time user queue & status alerts |
 | **`support_tickets`** | Platform customer and shop support ticketing |
 | **`audit_logs`** | Tamper-evident administrative and security audit trail |
 
@@ -67,38 +67,34 @@ RLS is strictly enabled on **all 11 tables**:
   - Can only view and update their own profile (`id = auth.uid()`).
   - Can view approved shops and active services/barbers.
   - Can only view and cancel their own queue entries (`customer_id = auth.uid()`).
-  - Cannot see other customers' personal details or shop financial fee records.
+  - Cannot see other customers' personal details.
 - **Staff**:
   - Can view and manage queue entries **only for their assigned shop** (`is_shop_staff(shop_id)`).
   - Can perform QR check-in verification, seat customers (`in_service`), and mark completions.
-  - Cannot access owner monthly financial statements or platform administration.
+  - Cannot access platform administration.
 - **Owners**:
   - Can manage only their own shops (`owner_id = auth.uid()`), catalog services, and barbers.
-  - Can view live queue entries, monthly billing records (`fee_records`), and file disputes within the dispute window.
+  - Can view live queue entries, completed haircut history, and shop statistics.
   - Cannot approve their own shops (must be approved by admin).
 - **Admins**:
   - Full read/write access across all tables via `is_admin()` security definer function.
 
 ---
 
-## 💼 Platform Fee & Billable Invariant
+## 💼 Zero Platform Fee Model (₹0 Platform Fee)
 
-### The Billable Rule:
-A queue entry is **billable** if and only if **all** of the following conditions are met:
-1. **Customer QR check-in exists** (`checked_in_at IS NOT NULL`)
-2. **Staff completion exists** (`completed_at IS NOT NULL` and `status = 'completed'`)
-3. **Not a walk-in** (`is_walkin = false`)
-4. **Not cancelled or marked no-show**
+QuickCut operates with **ZERO platform fees**:
+- **Customer platform fee**: **₹0**
+- **Barber shop platform fee**: **₹0**
+- **Per-service commission**: **₹0**
+- **Monthly platform subscription**: **₹0**
 
-### Fee Calculation:
-- **Rate**: **₹5.00 INR** per billable service completion.
-- Managed automatically by the database trigger: `trg_compute_queue_entry_billable` on `queue_entries`.
-- Walk-ins (`is_walkin = true`) and app cancellations/no-shows are **strictly exempt** from the platform fee.
-
-### Monthly Fee Records & Disputes:
-- Aggregated monthly via `generate_monthly_fee_record(p_shop_id, p_month)`.
-- Includes a **7-day dispute window** (`disputed_until = now() + interval '7 days'`).
-- Owners can dispute invoice discrepancies directly in their dashboard before the window closes.
+### Service Completion Workflow:
+When a haircut service is completed:
+1. The queue entry status updates from `in_service` to `completed`.
+2. Completion timestamp `completed_at` is authoritatively recorded.
+3. No platform fee, payment obligation, invoice, or commission is generated.
+4. Barber shop owners retain 100% of their earnings from in-shop customer services.
 
 ---
 

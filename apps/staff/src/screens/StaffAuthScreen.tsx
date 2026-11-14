@@ -125,13 +125,15 @@ export function StaffAuthScreen({ onLoginSuccess }: StaffAuthScreenProps) {
           </TouchableOpacity>
         </View>
 
-        {/* Quick Fill Button */}
-        <View style={styles.demoBox}>
-          <Text style={styles.demoLabel}>Demo Seed Account:</Text>
-          <TouchableOpacity style={styles.demoBtn} onPress={fillSeedStaff}>
-            <Text style={styles.demoBtnText}>Fill Sam Wilson (Staff)</Text>
-          </TouchableOpacity>
-        </View>
+        {/* Quick Fill Button (Development Only) */}
+        {__DEV__ && (
+          <View style={styles.demoBox}>
+            <Text style={styles.demoLabel}>Demo Seed Account:</Text>
+            <TouchableOpacity style={styles.demoBtn} onPress={fillSeedStaff}>
+              <Text style={styles.demoBtnText}>Fill Sam Wilson (Staff)</Text>
+            </TouchableOpacity>
+          </View>
+        )}
       </ScrollView>
     </KeyboardAvoidingView>
   );

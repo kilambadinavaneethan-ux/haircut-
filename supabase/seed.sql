@@ -375,8 +375,7 @@ VALUES (
     timezone('utc'::text, now() - INTERVAL '10 minutes')
 );
 
--- 3. Billable Completed entry (Customer QR Check-in + Staff Completion + Not Walkin)
--- Trigger will automatically compute is_billable = true!
+-- 3. Completed online entry (Customer QR Check-in + Staff Completion)
 INSERT INTO public.queue_entries (
     id, shop_id, customer_id, barber_id, service_id, queue_number, status, 
     qr_code_token, checked_in_at, called_at, completed_at, is_walkin, created_at
@@ -397,7 +396,7 @@ VALUES (
     timezone('utc'::text, now() - INTERVAL '2 hours 15 minutes')
 );
 
--- 4. Completed Walk-In entry (Should NOT be billable: is_walkin = true)
+-- 4. Completed Walk-In entry
 INSERT INTO public.queue_entries (
     id, shop_id, customer_id, barber_id, service_id, guest_name, queue_number, status, 
     qr_code_token, completed_at, is_walkin, created_at
@@ -417,38 +416,6 @@ VALUES (
     timezone('utc'::text, now() - INTERVAL '1 hour')
 );
 
--- Insert Fee Record for Shop (Demonstrates Rs 5 per billable service)
-INSERT INTO public.fee_records (
-    id, shop_id, month, billable_count, rate_per_service, amount, status, disputed_until, dispute_reason
-)
-VALUES (
-    '60000000-0000-0000-0000-000000000001',
-    '10000000-0000-0000-0000-000000000001',
-    to_char(timezone('utc'::text, now()), 'YYYY-MM'),
-    148,
-    5.00,
-    740.00, -- 148 * Rs 5
-    'pending',
-    timezone('utc'::text, now() + INTERVAL '5 days'),
-    NULL
-);
-
--- Insert Sample Payment
-INSERT INTO public.payments (
-    id, fee_record_id, shop_id, amount, currency, status, payment_method, transaction_ref, paid_at
-)
-VALUES (
-    '70000000-0000-0000-0000-000000000001',
-    '60000000-0000-0000-0000-000000000001',
-    '10000000-0000-0000-0000-000000000001',
-    740.00,
-    'INR',
-    'completed',
-    'UPI',
-    'UPI/20261022/984719284',
-    timezone('utc'::text, now() - INTERVAL '1 day')
-);
-
 -- Insert Notifications
 INSERT INTO public.notifications (user_id, title, message, type, read)
 VALUES 
@@ -457,13 +424,6 @@ VALUES
     'Your Turn is Approaching!',
     'Crown & Blade Barbershop: Sam Wilson is ready to welcome you shortly.',
     'queue_update',
-    false
-),
-(
-    '00000000-0000-0000-0000-000000000002',
-    'Monthly Fee Statement Ready',
-    'Your billing statement for this month has been generated: Rs 740.00 (148 billable cuts @ Rs 5/service).',
-    'billing',
     false
 );
 

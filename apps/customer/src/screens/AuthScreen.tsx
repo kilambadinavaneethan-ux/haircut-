@@ -211,24 +211,26 @@ export function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
           </TouchableOpacity>
         </View>
 
-        {/* Demo Fast Fill Section */}
-        <View style={styles.demoBox}>
-          <Text style={styles.demoTitle}>Quick Fill Seed Accounts:</Text>
-          <View style={styles.demoButtonsRow}>
-            <TouchableOpacity
-              style={styles.demoBtn}
-              onPress={() => fillTestCustomer(1)}
-            >
-              <Text style={styles.demoBtnText}>Rahul Sharma</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.demoBtn}
-              onPress={() => fillTestCustomer(2)}
-            >
-              <Text style={styles.demoBtnText}>Priya Patel</Text>
-            </TouchableOpacity>
+        {/* Demo Fast Fill Section (Development Only) */}
+        {__DEV__ && (
+          <View style={styles.demoBox}>
+            <Text style={styles.demoTitle}>Quick Fill Seed Accounts:</Text>
+            <View style={styles.demoButtonsRow}>
+              <TouchableOpacity
+                style={styles.demoBtn}
+                onPress={() => fillTestCustomer(1)}
+              >
+                <Text style={styles.demoBtnText}>Rahul Sharma</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.demoBtn}
+                onPress={() => fillTestCustomer(2)}
+              >
+                <Text style={styles.demoBtnText}>Priya Patel</Text>
+              </TouchableOpacity>
+            </View>
           </View>
-        </View>
+        )}
       </ScrollView>
     </KeyboardAvoidingView>
   );

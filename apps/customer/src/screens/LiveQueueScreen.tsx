@@ -138,8 +138,14 @@ export function LiveQueueScreen({
       )
       .subscribe();
 
+    // Polling fallback to keep queue position fresh if RLS isolates other customers' row events
+    const pollInterval = setInterval(() => {
+      calculateLiveQueueStatus();
+    }, 15000);
+
     return () => {
       supabase.removeChannel(channel);
+      clearInterval(pollInterval);
     };
   }, [activeEntry?.id, activeEntry?.shop_id]);
 

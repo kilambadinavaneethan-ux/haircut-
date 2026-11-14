@@ -2,22 +2,18 @@ import React, { useState, useEffect, useCallback } from 'react';
 import type { User } from '@supabase/supabase-js';
 import {
   Shop,
-  FeeRecord,
   SupportTicket,
   AuditLog,
   Profile,
   QueueEntry,
   Service,
-  Payment,
-  getSupabaseClient,
-  formatFeeAmount
+  getSupabaseClient
 } from '@quickcut/shared';
 
 import AdminAuthScreen from './screens/AdminAuthScreen';
 import ShopManagement from './components/ShopManagement';
 import AccountManagement from './components/AccountManagement';
 import PlatformActivity from './components/PlatformActivity';
-import RevenueLedgers from './components/RevenueLedgers';
 import AnomalyFraudWatch from './components/AnomalyFraudWatch';
 import TicketsAndDisputes from './components/TicketsAndDisputes';
 import PlatformSettings from './components/PlatformSettings';
@@ -203,54 +199,10 @@ const MOCK_QUEUE_ENTRIES: QueueEntry[] = [
     called_at: '2026-10-22T08:05:00Z',
     completed_at: '2026-10-22T08:28:00Z',
     is_walkin: false,
-    is_billable: true,
+    is_billable: false,
     queue_date: '2026-10-22',
     created_at: '2026-10-22T07:45:00Z',
     updated_at: '2026-10-22T08:28:00Z'
-  }
-];
-
-const MOCK_FEE_RECORDS: FeeRecord[] = [
-  {
-    id: '60000000-0000-0000-0000-000000000001',
-    shop_id: '10000000-0000-0000-0000-000000000001',
-    month: '2026-10',
-    billable_count: 148,
-    rate_per_service: 5.0,
-    amount: 740.0,
-    status: 'pending',
-    disputed_until: '2026-10-28T00:00:00Z',
-    dispute_reason: null,
-    created_at: '2026-10-20T00:00:00Z',
-    updated_at: '2026-10-20T00:00:00Z'
-  },
-  {
-    id: '60000000-0000-0000-0000-000000000002',
-    shop_id: '10000000-0000-0000-0000-000000000001',
-    month: '2026-09',
-    billable_count: 310,
-    rate_per_service: 5.0,
-    amount: 1550.0,
-    status: 'paid',
-    disputed_until: '2026-10-07T00:00:00Z',
-    dispute_reason: null,
-    created_at: '2026-09-30T00:00:00Z',
-    updated_at: '2026-10-05T00:00:00Z'
-  }
-];
-
-const MOCK_PAYMENTS: Payment[] = [
-  {
-    id: '70000000-0000-0000-0000-000000000001',
-    fee_record_id: '60000000-0000-0000-0000-000000000002',
-    shop_id: '10000000-0000-0000-0000-000000000001',
-    amount: 1550.0,
-    currency: 'INR',
-    status: 'success',
-    payment_method: 'UPI',
-    transaction_ref: 'UPI-98234-QC-SETTLE',
-    paid_at: '2026-10-05T14:30:00Z',
-    created_at: '2026-10-05T14:30:00Z'
   }
 ];
 
@@ -278,16 +230,6 @@ const MOCK_AUDIT_LOGS: AuditLog[] = [
     payload: { shop_name: 'Crown & Blade Barbershop', reviewer: 'admin' },
     ip_address: 'admin-console',
     created_at: '2026-10-01T10:00:00Z'
-  },
-  {
-    id: '90000000-0000-0000-0000-000000000002',
-    user_id: '00000000-0000-0000-0000-000000000001',
-    action: 'MONTHLY_BILLING_GENERATED',
-    entity_type: 'fee_records',
-    entity_id: '60000000-0000-0000-0000-000000000001',
-    payload: { month: '2026-10', rate: 5.0, total_shops: 1 },
-    ip_address: 'admin-console',
-    created_at: '2026-10-20T00:00:00Z'
   }
 ];
 
@@ -298,15 +240,13 @@ export default function AdminApp() {
 
   // Platform State
   const [activeTab, setActiveTab] = useState<
-    'shops' | 'accounts' | 'activity' | 'revenue' | 'fraud' | 'tickets' | 'settings' | 'logs'
+    'shops' | 'accounts' | 'activity' | 'fraud' | 'tickets' | 'settings' | 'logs'
   >('shops');
 
   const [shops, setShops] = useState<Shop[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [services, setServices] = useState<Service[]>([]);
   const [queueEntries, setQueueEntries] = useState<QueueEntry[]>([]);
-  const [feeRecords, setFeeRecords] = useState<FeeRecord[]>([]);
-  const [payments, setPayments] = useState<Payment[]>([]);
   const [tickets, setTickets] = useState<SupportTicket[]>([]);
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [realtimeConnected, setRealtimeConnected] = useState<boolean>(false);
@@ -353,8 +293,6 @@ export default function AdminApp() {
         profilesRes,
         servicesRes,
         queueRes,
-        feesRes,
-        paymentsRes,
         ticketsRes,
         logsRes
       ] = await Promise.all([
@@ -362,8 +300,6 @@ export default function AdminApp() {
         supabase.from('profiles').select('*').order('created_at', { ascending: false }),
         supabase.from('services').select('*').order('created_at', { ascending: false }),
         supabase.from('queue_entries').select('*').order('created_at', { ascending: false }).limit(200),
-        supabase.from('fee_records').select('*').order('created_at', { ascending: false }),
-        supabase.from('payments').select('*').order('created_at', { ascending: false }),
         supabase.from('support_tickets').select('*').order('created_at', { ascending: false }),
         supabase.from('audit_logs').select('*').order('created_at', { ascending: false }).limit(200)
       ]);
@@ -372,19 +308,15 @@ export default function AdminApp() {
       const liveProfiles = (profilesRes.data as unknown as Profile[]) || [];
       const liveServices = (servicesRes.data as unknown as Service[]) || [];
       const liveQueue = (queueRes.data as unknown as QueueEntry[]) || [];
-      const liveFees = (feesRes.data as unknown as FeeRecord[]) || [];
-      const livePayments = (paymentsRes.data as unknown as Payment[]) || [];
       const liveTickets = (ticketsRes.data as unknown as SupportTicket[]) || [];
       const liveLogs = (logsRes.data as unknown as AuditLog[]) || [];
 
-      // Always bind to authentic database records. Never silently substitute fake financial data.
+      // Always bind to authentic database records.
       setIsDemoMode(false);
       setShops(liveShops);
       setProfiles(liveProfiles);
       setServices(liveServices);
       setQueueEntries(liveQueue);
-      setFeeRecords(liveFees);
-      setPayments(livePayments);
       setTickets(liveTickets);
       setLogs(liveLogs);
     } catch (err) {
@@ -489,10 +421,6 @@ export default function AdminApp() {
     setQueueEntries((prev) => prev.map((e) => (e.id === updated.id ? updated : e)));
   };
 
-  const handleFeeRecordUpdated = (updated: FeeRecord) => {
-    setFeeRecords((prev) => prev.map((r) => (r.id === updated.id ? updated : r)));
-  };
-
   const handleTicketUpdated = (updated: SupportTicket) => {
     setTickets((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
   };
@@ -529,11 +457,10 @@ export default function AdminApp() {
   }
 
   // Aggregate Metrics for Top Bar
-  const totalRevenue = feeRecords.reduce((sum, r) => sum + r.amount, 0);
-  const totalBillableCuts = queueEntries.filter((e) => e.is_billable).length;
+  const totalCompletedServices = queueEntries.filter((e) => e.status === 'completed').length;
+  const activeQueueCount = queueEntries.filter((e) => e.status === 'waiting' || e.status === 'in_service').length;
   const pendingApprovals = shops.filter((s) => s.status === 'pending').length;
   const openTickets = tickets.filter((t) => t.status === 'open').length;
-  const activeDisputes = feeRecords.filter((r) => r.status === 'disputed').length;
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh', flexDirection: 'column' }}>
@@ -586,9 +513,8 @@ export default function AdminApp() {
             { id: 'shops', label: `Shops (${pendingApprovals > 0 ? `${pendingApprovals} pending` : shops.length})` },
             { id: 'accounts', label: `Accounts (${profiles.length})` },
             { id: 'activity', label: 'Live Traffic' },
-            { id: 'revenue', label: 'Revenue (₹5/cut)' },
             { id: 'fraud', label: 'Fraud Watch' },
-            { id: 'tickets', label: `Disputes & Tickets (${activeDisputes + openTickets})` },
+            { id: 'tickets', label: `Support Tickets (${openTickets})` },
             { id: 'settings', label: 'Settings' },
             { id: 'logs', label: 'Audit Trail' }
           ].map((tab) => (
@@ -659,8 +585,6 @@ export default function AdminApp() {
               setProfiles([]);
               setServices([]);
               setQueueEntries([]);
-              setFeeRecords([]);
-              setPayments([]);
               setTickets([]);
               setLogs([]);
             }}
@@ -693,30 +617,30 @@ export default function AdminApp() {
           </div>
 
           <div className="glass-panel" style={{ padding: 18 }}>
-            <p style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 700 }}>BILLABLE HAIRCUTS (TOTAL)</p>
+            <p style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 700 }}>COMPLETED SERVICES</p>
             <p style={{ fontSize: 26, fontWeight: 900, color: 'var(--accent-green)', marginTop: 4 }}>
-              {totalBillableCuts}
+              {totalCompletedServices}
             </p>
             <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>
-              QR Check-in + Staff verified
+              Total fulfilled haircuts
             </p>
           </div>
 
           <div className="glass-panel" style={{ padding: 18 }}>
-            <p style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 700 }}>PLATFORM REVENUE BILLED</p>
+            <p style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 700 }}>ACTIVE QUEUES</p>
             <p style={{ fontSize: 26, fontWeight: 900, color: 'var(--accent-indigo)', marginTop: 4 }}>
-              {formatFeeAmount(totalRevenue)}
+              {activeQueueCount}
             </p>
-            <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>Fixed rate: ₹5.00 INR/cut</p>
+            <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>Waiting or in-service clients</p>
           </div>
 
           <div className="glass-panel" style={{ padding: 18 }}>
-            <p style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 700 }}>PENDING DISPUTES & TICKETS</p>
-            <p style={{ fontSize: 26, fontWeight: 900, color: activeDisputes + openTickets > 0 ? 'var(--accent-rose)' : 'var(--accent-green)', marginTop: 4 }}>
-              {activeDisputes + openTickets}
+            <p style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 700 }}>SUPPORT TICKETS</p>
+            <p style={{ fontSize: 26, fontWeight: 900, color: openTickets > 0 ? 'var(--accent-rose)' : 'var(--accent-green)', marginTop: 4 }}>
+              {openTickets}
             </p>
             <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>
-              {activeDisputes} fee disputes • {openTickets} support tickets
+              {openTickets} open inquiries
             </p>
           </div>
         </div>
@@ -751,16 +675,7 @@ export default function AdminApp() {
           />
         )}
 
-        {/* Tab 4: Revenue & Fee Ledgers */}
-        {activeTab === 'revenue' && (
-          <RevenueLedgers
-            shops={shops}
-            feeRecords={feeRecords}
-            payments={payments}
-          />
-        )}
-
-        {/* Tab 5: Fraud & Anomaly Watchdog */}
+        {/* Tab 4: Fraud & Anomaly Watchdog */}
         {activeTab === 'fraud' && (
           <AnomalyFraudWatch
             adminId={currentUser.id}
@@ -772,14 +687,12 @@ export default function AdminApp() {
           />
         )}
 
-        {/* Tab 6: Support Tickets & Fee Disputes */}
+        {/* Tab 5: Support Tickets */}
         {activeTab === 'tickets' && (
           <TicketsAndDisputes
             adminId={currentUser.id}
             shops={shops}
-            feeRecords={feeRecords}
             tickets={tickets}
-            onFeeRecordUpdated={handleFeeRecordUpdated}
             onTicketUpdated={handleTicketUpdated}
           />
         )}

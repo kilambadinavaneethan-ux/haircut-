@@ -4,22 +4,24 @@ export interface WaitTimeInput {
   targetEntryId: string;
   queueEntries: QueueEntry[];
   servicesMap: Record<string, Pick<Service, 'id' | 'avg_minutes'>>;
+  activeBarberCount?: number;
 }
 
 /**
  * Calculates estimated wait time for a given queue entry:
- * Sum of avg_minutes of services ahead in the queue.
+ * Factors in parallel active barbers (M/G/c queue simulation) and service durations.
  * Clearly demarcated as an estimate.
  */
 export function calculateEstimatedWaitTime(input: WaitTimeInput): EstimatedWaitCalculation {
-  const { targetEntryId, queueEntries, servicesMap } = input;
+  const { targetEntryId, queueEntries, servicesMap, activeBarberCount = 1 } = input;
   const target = queueEntries.find(e => e.id === targetEntryId);
+  const barbers = Math.max(1, activeBarberCount);
 
   const defaultResult: EstimatedWaitCalculation = {
     estimatedMinutes: 0,
     peopleAhead: 0,
     isEstimate: true,
-    disclaimer: 'Estimated wait is approximate and dynamically calculated based on queue progress.'
+    disclaimer: 'Estimated wait is approximate and dynamically calculated based on queue progress and active barbers.'
   };
 
   if (!target || target.status !== 'waiting') {
@@ -50,29 +52,37 @@ export function calculateEstimatedWaitTime(input: WaitTimeInput): EstimatedWaitC
     return sum + duration;
   }, 0);
 
+  // Divide workload across parallel active barbers
+  const estimatedMinutes = Math.ceil(totalMinutes / barbers);
+
   return {
-    estimatedMinutes: totalMinutes,
+    estimatedMinutes,
     peopleAhead: entriesAhead.length,
     isEstimate: true,
-    disclaimer: 'Estimated wait is approximate and dynamically calculated based on queue progress.'
+    disclaimer: 'Estimated wait is approximate and dynamically calculated based on queue progress and active barbers.'
   };
 }
 
 /**
  * Calculates estimated wait time for a newcomer joining a specific shop queue.
+ * Accounts for multiple active barbers.
  */
 export function calculateShopCurrentWait(
   queueEntries: QueueEntry[],
-  servicesMap: Record<string, Pick<Service, 'id' | 'avg_minutes'>>
+  servicesMap: Record<string, Pick<Service, 'id' | 'avg_minutes'>>,
+  activeBarberCount: number = 1
 ): { estimatedMinutes: number; waitingCount: number; isEstimate: true } {
   const activeEntries = queueEntries.filter(
     e => e.status === 'waiting' || e.status === 'in_service'
   );
+  const barbers = Math.max(1, activeBarberCount);
 
-  const estimatedMinutes = activeEntries.reduce((sum, entry) => {
+  const totalWorkload = activeEntries.reduce((sum, entry) => {
     const service = servicesMap[entry.service_id];
     return sum + (service ? service.avg_minutes : 20);
   }, 0);
+
+  const estimatedMinutes = Math.ceil(totalWorkload / barbers);
 
   return {
     estimatedMinutes,

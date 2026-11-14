@@ -121,7 +121,7 @@ CREATE TABLE IF NOT EXISTS public.fee_records (
     shop_id UUID NOT NULL REFERENCES public.shops(id) ON DELETE CASCADE,
     month TEXT NOT NULL, -- Format: YYYY-MM
     billable_count INTEGER NOT NULL DEFAULT 0 CHECK (billable_count >= 0),
-    rate_per_service NUMERIC(10, 2) NOT NULL DEFAULT 5.00,
+    rate_per_service NUMERIC(10, 2) NOT NULL DEFAULT 0.00,
     amount NUMERIC(10, 2) NOT NULL DEFAULT 0.00 CHECK (amount >= 0),
     status fee_status NOT NULL DEFAULT 'pending',
     disputed_until TIMESTAMPTZ NOT NULL,
@@ -627,21 +627,11 @@ FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
 -- - customer QR check-in exists (checked_in_at IS NOT NULL)
 -- - AND staff completion exists (completed_at IS NOT NULL)
 -- - AND status = 'completed'
--- - AND is_walkin = false
--- Fee rate: Rs 5 per billable service
+-- QuickCut operates at ₹0 platform fee. No queue entry is billable.
 CREATE OR REPLACE FUNCTION public.fn_compute_queue_entry_billable()
 RETURNS TRIGGER AS $$
 BEGIN
-    IF NEW.checked_in_at IS NOT NULL
-       AND NEW.completed_at IS NOT NULL
-       AND NEW.status = 'completed'
-       AND NEW.is_walkin = false
-    THEN
-        NEW.is_billable := true;
-    ELSE
-        NEW.is_billable := false;
-    END IF;
-
+    NEW.is_billable := false;
     NEW.updated_at := timezone('utc'::text, now());
     RETURN NEW;
 END;
@@ -765,57 +755,14 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public;
 
--- 6. Monthly Fee Aggregator Function
--- Calculates monthly billable cuts (Rs 5/service) and generates fee_records
+-- 6. Monthly Fee Aggregator Function (Deactivated - ₹0 Platform Fee Model)
 CREATE OR REPLACE FUNCTION public.generate_monthly_fee_record(p_shop_id UUID, p_month TEXT)
 RETURNS UUID AS $$
-DECLARE
-    v_billable_count INTEGER := 0;
-    v_rate NUMERIC(10, 2) := 5.00;
-    v_amount NUMERIC(10, 2) := 0.00;
-    v_disputed_until TIMESTAMPTZ;
-    v_record_id UUID;
 BEGIN
-    -- Month format expectation: 'YYYY-MM'
-    -- Find billable queue entries completed within that month
-    SELECT COUNT(*)
-    INTO v_billable_count
-    FROM public.queue_entries
-    WHERE shop_id = p_shop_id
-      AND is_billable = true
-      AND to_char(completed_at, 'YYYY-MM') = p_month;
-
-    v_amount := v_billable_count * v_rate;
-    -- 7-day dispute window after generation
-    v_disputed_until := timezone('utc'::text, now()) + INTERVAL '7 days';
-
-    INSERT INTO public.fee_records (
-        shop_id,
-        month,
-        billable_count,
-        rate_per_service,
-        amount,
-        status,
-        disputed_until
-    )
-    VALUES (
-        p_shop_id,
-        p_month,
-        v_billable_count,
-        v_rate,
-        v_amount,
-        'pending',
-        v_disputed_until
-    )
-    ON CONFLICT (shop_id, month) DO UPDATE
-    SET billable_count = EXCLUDED.billable_count,
-        amount = EXCLUDED.amount,
-        updated_at = timezone('utc'::text, now())
-    RETURNING id INTO v_record_id;
-
-    RETURN v_record_id;
+    -- QuickCut operates at ₹0 platform fee. No fee invoices are generated.
+    RETURN NULL;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
 -- QuickCut Platform - Seed Script
 -- File: supabase/seed.sql
 
@@ -1234,8 +1181,8 @@ VALUES (
     timezone('utc'::text, now() - INTERVAL '10 minutes')
 ) ON CONFLICT (id) DO NOTHING;
 
--- 3. Billable Completed entry (Customer QR Check-in + Staff Completion + Not Walkin)
--- Trigger will automatically compute is_billable = true!
+-- 3. Completed entry (Customer QR Check-in + Staff Completion + Not Walkin)
+-- QuickCut operates at ₹0 platform fee. No service is billable.
 INSERT INTO public.queue_entries (
     id, shop_id, customer_id, barber_id, service_id, queue_number, status, 
     qr_code_token, checked_in_at, called_at, completed_at, is_walkin, created_at
@@ -1277,37 +1224,6 @@ VALUES (
 ) ON CONFLICT (id) DO NOTHING;
 
 -- Insert Fee Record for Shop (Demonstrates Rs 5 per billable service)
-INSERT INTO public.fee_records (
-    id, shop_id, month, billable_count, rate_per_service, amount, status, disputed_until, dispute_reason
-)
-VALUES (
-    '60000000-0000-0000-0000-000000000001',
-    '10000000-0000-0000-0000-000000000001',
-    to_char(timezone('utc'::text, now()), 'YYYY-MM'),
-    148,
-    5.00,
-    740.00, -- 148 * Rs 5
-    'pending',
-    timezone('utc'::text, now() + INTERVAL '5 days'),
-    NULL
-) ON CONFLICT (id) DO NOTHING;
-
--- Insert Sample Payment
-INSERT INTO public.payments (
-    id, fee_record_id, shop_id, amount, currency, status, payment_method, transaction_ref, paid_at
-)
-VALUES (
-    '70000000-0000-0000-0000-000000000001',
-    '60000000-0000-0000-0000-000000000001',
-    '10000000-0000-0000-0000-000000000001',
-    740.00,
-    'INR',
-    'completed',
-    'UPI',
-    'UPI/20261022/984719284',
-    timezone('utc'::text, now() - INTERVAL '1 day')
-) ON CONFLICT (id) DO NOTHING;
-
 -- Insert Notifications
 INSERT INTO public.notifications (user_id, title, message, type, read)
 VALUES 
@@ -1316,13 +1232,6 @@ VALUES
     'Your Turn is Approaching!',
     'Crown & Blade Barbershop: Sam Wilson is ready to welcome you shortly.',
     'queue_update',
-    false
-),
-(
-    '00000000-0000-0000-0000-000000000002',
-    'Monthly Fee Statement Ready',
-    'Your billing statement for this month has been generated: Rs 740.00 (148 billable cuts @ Rs 5/service).',
-    'billing',
     false
 );
 
@@ -2033,21 +1942,9 @@ BEGIN
         NEW.completed_at := timezone('utc'::text, now());
     END IF;
 
-    -- 4e. Core Platform ₹5 Billing Invariant:
-    -- A queue entry is billable ONLY IF:
-    -- 1. status = 'completed'
-    -- 2. checked_in_at IS NOT NULL (Customer QR verified arrival)
-    -- 3. completed_at IS NOT NULL
-    -- 4. is_walkin = false (Never walk-ins)
-    IF NEW.status = 'completed'
-       AND NEW.checked_in_at IS NOT NULL
-       AND NEW.completed_at IS NOT NULL
-       AND NEW.is_walkin = false
-    THEN
-        NEW.is_billable := true;
-    ELSE
-        NEW.is_billable := false;
-    END IF;
+    -- 4e. Core Platform Zero-Fee Invariant:
+    -- QuickCut operates at ₹0 platform fee. No queue entry is billable.
+    NEW.is_billable := false;
 
     NEW.updated_at := timezone('utc'::text, now());
     RETURN NEW;
@@ -2162,8 +2059,8 @@ BEGIN
             'entry_id', p_entry_id,
             'queue_number', v_entry.queue_number,
             'status', 'completed',
-            'is_billable', v_entry.is_billable,
-            'platform_fee_inr', CASE WHEN v_entry.is_billable THEN 5.00 ELSE 0.00 END,
+            'is_billable', false,
+            'platform_fee_inr', 0.00,
             'already_completed', true
         );
     END IF;
@@ -2184,8 +2081,8 @@ BEGIN
         'entry_id', p_entry_id,
         'queue_number', v_entry.queue_number,
         'status', 'completed',
-        'is_billable', v_is_billable,
-        'platform_fee_inr', CASE WHEN v_is_billable THEN 5.00 ELSE 0.00 END,
+        'is_billable', false,
+        'platform_fee_inr', 0.00,
         'already_completed', false
     );
 END;
@@ -2246,320 +2143,119 @@ REVOKE ALL ON FUNCTION public.join_queue(UUID, UUID, UUID) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.join_queue(UUID, UUID, UUID) TO authenticated, service_role;
 
 -- ==========================================================================
--- SECTION: ₹5 BILLING RULE, INVOICE PROTECTION & PAYMENTS (MIGRATION 20261023000004)
--- ==========================================================================
+-- SECTION 6.5: COMPLETE REMOVAL OF PLATFORM FEE (Migration 20261024000001)
+-- QuickCut operates with ZERO platform fees (₹0 per service, ₹0 monthly subscription, ₹0 commission).
+-- Barber shop owners and customers are never charged any platform fee.
+-- ============================================================================
 
--- QuickCut Platform - Stage D: ₹5 Platform Billing, Invoice Protection & Payment Integrity
--- Migration: 20261023000004_billing_and_payments.sql
+DROP TRIGGER IF EXISTS trg_compute_queue_entry_billable ON public.queue_entries;
+DROP TRIGGER IF EXISTS trg_protect_fee_record_updates ON public.fee_records;
 
--- 1. Repeatable & Hardened Monthly Fee Aggregator
+CREATE OR REPLACE FUNCTION public.fn_compute_queue_entry_billable()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.is_billable := false;
+    NEW.updated_at := timezone('utc'::text, now());
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION public.complete_service_atomic(
+    p_entry_id UUID
+)
+RETURNS JSONB AS $$
+DECLARE
+    v_entry public.queue_entries%ROWTYPE;
+    v_shop_id UUID;
+BEGIN
+    SELECT * INTO v_entry
+    FROM public.queue_entries
+    WHERE id = p_entry_id
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Queue entry not found.';
+    END IF;
+
+    v_shop_id := v_entry.shop_id;
+
+    IF NOT (public.is_admin() OR public.is_shop_staff(v_shop_id) OR public.is_shop_owner(v_shop_id)) THEN
+        RAISE EXCEPTION 'Unauthorized to complete service for this shop.';
+    END IF;
+
+    IF v_entry.status = 'completed' THEN
+        RETURN jsonb_build_object(
+            'success', true,
+            'entry_id', p_entry_id,
+            'queue_number', v_entry.queue_number,
+            'status', 'completed',
+            'is_billable', false,
+            'platform_fee_inr', 0.00,
+            'already_completed', true
+        );
+    END IF;
+
+    IF v_entry.status NOT IN ('in_service', 'waiting') THEN
+        RAISE EXCEPTION 'Cannot complete ticket #% with status "%".', v_entry.queue_number, v_entry.status;
+    END IF;
+
+    UPDATE public.queue_entries
+    SET status = 'completed',
+        completed_at = timezone('utc'::text, now()),
+        is_billable = false,
+        updated_at = timezone('utc'::text, now())
+    WHERE id = p_entry_id;
+
+    RETURN jsonb_build_object(
+        'success', true,
+        'entry_id', p_entry_id,
+        'queue_number', v_entry.queue_number,
+        'status', 'completed',
+        'is_billable', false,
+        'platform_fee_inr', 0.00,
+        'already_completed', false
+    );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
+
 CREATE OR REPLACE FUNCTION public.generate_monthly_fee_record(
     p_shop_id UUID, 
     p_month TEXT
 )
 RETURNS UUID AS $$
-DECLARE
-    v_billable_count INTEGER := 0;
-    v_rate NUMERIC(10, 2) := 5.00;
-    v_amount NUMERIC(10, 2) := 0.00;
-    v_disputed_until TIMESTAMPTZ;
-    v_existing public.fee_records%ROWTYPE;
-    v_record_id UUID;
-    v_shop_tz TEXT;
 BEGIN
-    -- 1a. Validate strict YYYY-MM format
-    IF p_month IS NULL OR p_month !~ '^[0-9]{4}-(0[1-9]|1[0-2])$' THEN
-        RAISE EXCEPTION 'Invalid month format: "%". Expected strict YYYY-MM format.', p_month;
-    END IF;
-
-    -- 1b. Caller Authorization: Super Admin or Shop Owner
-    IF NOT (public.is_admin() OR public.is_shop_owner(p_shop_id)) THEN
-        RAISE EXCEPTION 'Unauthorized: Caller cannot generate fee statements for shop %.', p_shop_id;
-    END IF;
-
-    -- 1c. Fetch shop's local timezone
-    SELECT COALESCE(timezone, 'Asia/Kolkata') INTO v_shop_tz
-    FROM public.shops
-    WHERE id = p_shop_id;
-
-    IF NOT FOUND THEN
-        RAISE EXCEPTION 'Shop with ID % does not exist.', p_shop_id;
-    END IF;
-
-    -- 1d. Check for existing invoice
-    SELECT * INTO v_existing
-    FROM public.fee_records
-    WHERE shop_id = p_shop_id AND month = p_month
-    FOR UPDATE;
-
-    -- Invariant: Paid invoices are immutable
-    IF FOUND AND v_existing.status = 'paid' THEN
-        RETURN v_existing.id;
-    END IF;
-
-    -- Invariant: Disputed invoices cannot be overwritten silently
-    IF FOUND AND v_existing.status = 'disputed' THEN
-        RETURN v_existing.id;
-    END IF;
-
-    -- 1e. Count only eligible completed services within that calendar month in shop's local timezone
-    -- Billing Rule: is_billable = true, status = 'completed', is_walkin = false, customer QR checked in
-    SELECT COUNT(*)
-    INTO v_billable_count
-    FROM public.queue_entries qe
-    WHERE qe.shop_id = p_shop_id
-      AND qe.is_billable = true
-      AND qe.status = 'completed'
-      AND to_char(timezone(v_shop_tz, qe.completed_at), 'YYYY-MM') = p_month;
-
-    v_amount := v_billable_count * v_rate;
-    v_disputed_until := COALESCE(v_existing.disputed_until, timezone('utc'::text, now()) + INTERVAL '7 days');
-
-    INSERT INTO public.fee_records (
-        shop_id,
-        month,
-        billable_count,
-        rate_per_service,
-        amount,
-        status,
-        disputed_until
-    )
-    VALUES (
-        p_shop_id,
-        p_month,
-        v_billable_count,
-        v_rate,
-        v_amount,
-        'pending',
-        v_disputed_until
-    )
-    ON CONFLICT (shop_id, month) DO UPDATE
-    SET billable_count = EXCLUDED.billable_count,
-        amount = EXCLUDED.amount,
-        updated_at = timezone('utc'::text, now())
-    WHERE public.fee_records.status NOT IN ('paid', 'disputed')
-    RETURNING id INTO v_record_id;
-
-    RETURN COALESCE(v_record_id, v_existing.id);
+    RETURN NULL;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
 
--- 2. Controlled Fee Dispute RPC
-CREATE OR REPLACE FUNCTION public.dispute_fee_record(
-    p_fee_record_id UUID,
-    p_reason TEXT
-)
-RETURNS JSONB AS $$
-DECLARE
-    v_record public.fee_records%ROWTYPE;
-BEGIN
-    IF p_reason IS NULL OR TRIM(p_reason) = '' THEN
-        RAISE EXCEPTION 'A dispute reason must be provided.';
-    END IF;
-
-    SELECT * INTO v_record
-    FROM public.fee_records
-    WHERE id = p_fee_record_id
-    FOR UPDATE;
-
-    IF NOT FOUND THEN
-        RAISE EXCEPTION 'Fee invoice not found.';
-    END IF;
-
-    -- Verify caller is shop owner or admin
-    IF NOT (public.is_admin() OR public.is_shop_owner(v_record.shop_id)) THEN
-        RAISE EXCEPTION 'Unauthorized: Caller cannot dispute this fee statement.';
-    END IF;
-
-    -- Check if already settled
-    IF v_record.status = 'paid' THEN
-        RAISE EXCEPTION 'Paid invoices cannot be disputed.';
-    END IF;
-
-    -- Check 7-day dispute window
-    IF timezone('utc'::text, now()) > v_record.disputed_until THEN
-        RAISE EXCEPTION 'The 7-day dispute window for statement month % closed on %.',
-            v_record.month, to_char(v_record.disputed_until, 'YYYY-MM-DD');
-    END IF;
-
-    -- Set status to disputed
-    UPDATE public.fee_records
-    SET status = 'disputed',
-        dispute_reason = TRIM(p_reason),
-        updated_at = timezone('utc'::text, now())
-    WHERE id = p_fee_record_id;
-
-    -- Log audit entry
-    INSERT INTO public.audit_logs (user_id, action, entity_type, entity_id, payload)
-    VALUES (
-        auth.uid(),
-        'FEE_INVOICE_DISPUTED',
-        'fee_records',
-        p_fee_record_id::text,
-        jsonb_build_object(
-            'shop_id', v_record.shop_id,
-            'month', v_record.month,
-            'amount', v_record.amount,
-            'reason', TRIM(p_reason)
-        )
-    );
-
-    RETURN jsonb_build_object(
-        'success', true,
-        'fee_record_id', p_fee_record_id,
-        'status', 'disputed'
-    );
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
-
--- 3. Fee Records Column Protection Trigger
-CREATE OR REPLACE FUNCTION public.fn_protect_fee_record_updates()
-RETURNS TRIGGER AS $$
-BEGIN
-    -- Super Admin can perform administrative corrections
-    IF public.is_admin() THEN
-        NEW.updated_at := timezone('utc'::text, now());
-        RETURN NEW;
-    END IF;
-
-    -- Non-admin callers (owners) can NEVER modify financial figures
-    NEW.amount := OLD.amount;
-    NEW.billable_count := OLD.billable_count;
-    NEW.rate_per_service := OLD.rate_per_service;
-    NEW.month := OLD.month;
-    NEW.shop_id := OLD.shop_id;
-    NEW.disputed_until := OLD.disputed_until;
-
-    -- Owner can only dispute within the active window
-    IF NEW.status = 'disputed' THEN
-        IF timezone('utc'::text, now()) > OLD.disputed_until THEN
-            RAISE EXCEPTION 'Dispute window for invoice % has expired.', OLD.id;
-        END IF;
-    ELSIF NEW.status != OLD.status THEN
-        -- Owners cannot set status to 'paid', 'waived', etc. directly
-        RAISE EXCEPTION 'Unauthorized fee status transition to "%". Use official settlement or admin workflow.', NEW.status;
-    END IF;
-
-    NEW.updated_at := timezone('utc'::text, now());
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
-
-DROP TRIGGER IF EXISTS trg_protect_fee_record_updates ON public.fee_records;
-CREATE TRIGGER trg_protect_fee_record_updates
-BEFORE UPDATE ON public.fee_records
-FOR EACH ROW
-EXECUTE FUNCTION public.fn_protect_fee_record_updates();
-
--- 4. Secure Fee Payment Settlement RPC
 CREATE OR REPLACE FUNCTION public.process_fee_payment(
     p_fee_record_id UUID,
     p_payment_method TEXT DEFAULT 'UPI',
     p_transaction_ref TEXT DEFAULT NULL
 )
 RETURNS JSONB AS $$
-DECLARE
-    v_record public.fee_records%ROWTYPE;
-    v_payment_id UUID;
-    v_ref TEXT;
 BEGIN
-    SELECT * INTO v_record
-    FROM public.fee_records
-    WHERE id = p_fee_record_id
-    FOR UPDATE;
-
-    IF NOT FOUND THEN
-        RAISE EXCEPTION 'Fee invoice record not found.';
-    END IF;
-
-    -- Caller authorization
-    IF NOT (public.is_admin() OR public.is_shop_owner(v_record.shop_id)) THEN
-        RAISE EXCEPTION 'Unauthorized to settle fees for this shop.';
-    END IF;
-
-    -- Idempotent check
-    IF v_record.status = 'paid' THEN
-        RETURN jsonb_build_object(
-            'success', true,
-            'status', 'already_paid',
-            'amount', v_record.amount,
-            'fee_record_id', v_record.id
-        );
-    END IF;
-
-    -- Disputed invoice protection
-    IF v_record.status = 'disputed' AND NOT public.is_admin() THEN
-        RAISE EXCEPTION 'Invoice is currently under dispute review. Administrator must resolve before settlement.';
-    END IF;
-
-    v_ref := COALESCE(
-        p_transaction_ref, 
-        'UPI/' || to_char(now(), 'YYYYMMDD') || '/' || floor(10000000 + random() * 90000000)::text
-    );
-
-    -- Prevent duplicate transaction reference
-    IF EXISTS (SELECT 1 FROM public.payments WHERE transaction_ref = v_ref) THEN
-        RAISE EXCEPTION 'Payment reference % has already been recorded.', v_ref;
-    END IF;
-
-    -- 1. Insert authoritative payment record
-    INSERT INTO public.payments (
-        fee_record_id,
-        shop_id,
-        amount,
-        currency,
-        status,
-        payment_method,
-        transaction_ref,
-        paid_at
-    )
-    VALUES (
-        v_record.id,
-        v_record.shop_id,
-        v_record.amount,
-        'INR',
-        'completed',
-        COALESCE(p_payment_method, 'UPI'),
-        v_ref,
-        timezone('utc'::text, now())
-    )
-    RETURNING id INTO v_payment_id;
-
-    -- 2. Mark fee record as paid
-    UPDATE public.fee_records
-    SET status = 'paid',
-        updated_at = timezone('utc'::text, now())
-    WHERE id = v_record.id;
-
-    -- 3. Audit log entry
-    INSERT INTO public.audit_logs (user_id, action, entity_type, entity_id, payload)
-    VALUES (
-        auth.uid(),
-        'FEE_INVOICE_PAID',
-        'fee_records',
-        v_record.id::text,
-        jsonb_build_object(
-            'shop_id', v_record.shop_id,
-            'month', v_record.month,
-            'amount', v_record.amount,
-            'billable_count', v_record.billable_count,
-            'payment_id', v_payment_id,
-            'transaction_ref', v_ref
-        )
-    );
-
     RETURN jsonb_build_object(
         'success', true,
-        'payment_id', v_payment_id,
-        'fee_record_id', v_record.id,
-        'status', 'paid',
-        'amount', v_record.amount,
-        'transaction_ref', v_ref
+        'message', 'Platform fee is ₹0. No fee payment is required.',
+        'status', 'zero_fee'
     );
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
 
--- 5. Administrative Fee Adjustment RPC
+CREATE OR REPLACE FUNCTION public.dispute_fee_record(
+    p_fee_record_id UUID,
+    p_reason TEXT
+)
+RETURNS JSONB AS $$
+BEGIN
+    RETURN jsonb_build_object(
+        'success', true,
+        'message', 'Platform fee system is deactivated. No fees to dispute.'
+    );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
+
 CREATE OR REPLACE FUNCTION public.admin_adjust_fee_record(
     p_fee_record_id UUID,
     p_new_status fee_status,
@@ -2567,61 +2263,334 @@ CREATE OR REPLACE FUNCTION public.admin_adjust_fee_record(
     p_admin_note TEXT
 )
 RETURNS JSONB AS $$
-DECLARE
-    v_old_status fee_status;
-    v_old_amount NUMERIC(10, 2);
 BEGIN
-    IF NOT public.is_admin() THEN
-        RAISE EXCEPTION 'Access denied: Super Admin privileges required.';
-    END IF;
-
-    SELECT status, amount INTO v_old_status, v_old_amount
-    FROM public.fee_records
-    WHERE id = p_fee_record_id
-    FOR UPDATE;
-
-    IF NOT FOUND THEN
-        RAISE EXCEPTION 'Fee invoice not found.';
-    END IF;
-
-    UPDATE public.fee_records
-    SET status = p_new_status,
-        amount = COALESCE(p_adjusted_amount, amount),
-        updated_at = timezone('utc'::text, now())
-    WHERE id = p_fee_record_id;
-
-    INSERT INTO public.audit_logs (user_id, action, entity_type, entity_id, payload)
-    VALUES (
-        auth.uid(),
-        'ADMIN_FEE_ADJUSTMENT',
-        'fee_records',
-        p_fee_record_id::text,
-        jsonb_build_object(
-            'old_status', v_old_status,
-            'new_status', p_new_status,
-            'old_amount', v_old_amount,
-            'new_amount', p_adjusted_amount,
-            'note', p_admin_note
-        )
+    RETURN jsonb_build_object(
+        'success', true,
+        'message', 'Platform fee system is deactivated.'
     );
-
-    RETURN jsonb_build_object('success', true, 'fee_record_id', p_fee_record_id, 'status', p_new_status);
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
 
--- 6. Restrict Function Permissions
-REVOKE ALL ON FUNCTION public.generate_monthly_fee_record(UUID, TEXT) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.generate_monthly_fee_record(UUID, TEXT) TO authenticated, service_role;
+ALTER TABLE public.fee_records ALTER COLUMN rate_per_service SET DEFAULT 0.00;
 
-REVOKE ALL ON FUNCTION public.dispute_fee_record(UUID, TEXT) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.dispute_fee_record(UUID, TEXT) TO authenticated, service_role;
+UPDATE public.fee_records
+SET amount = 0.00,
+    rate_per_service = 0.00,
+    status = 'waived',
+    updated_at = timezone('utc'::text, now())
+WHERE status IN ('pending', 'disputed');
 
-REVOKE ALL ON FUNCTION public.process_fee_payment(UUID, TEXT, TEXT) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.process_fee_payment(UUID, TEXT, TEXT) TO authenticated, service_role;
+UPDATE public.queue_entries
+SET is_billable = false
+WHERE is_billable = true;
 
-REVOKE ALL ON FUNCTION public.admin_adjust_fee_record(UUID, fee_status, NUMERIC(10, 2), TEXT) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.admin_adjust_fee_record(UUID, fee_status, NUMERIC(10, 2), TEXT) TO authenticated, service_role;
+DELETE FROM public.notifications
+WHERE type = 'billing' OR title ILIKE '%fee%' OR message ILIKE '%billable%' OR message ILIKE '%platform fee%';
 
+-- ============================================================================
+-- SECTION 6.6: QUEUE AGGREGATES, MULTI-BARBER WAIT TIME & SECURITY HARDENING (Migration 20261024000002)
+-- ============================================================================
+
+CREATE OR REPLACE FUNCTION public.get_shops_queue_summary()
+RETURNS TABLE (
+    shop_id UUID,
+    waiting_count BIGINT,
+    in_service_count BIGINT,
+    active_barbers_count BIGINT,
+    estimated_wait_minutes BIGINT
+) AS $$
+BEGIN
+    RETURN QUERY
+    WITH active_barbers_per_shop AS (
+        SELECT b.shop_id AS b_shop_id, COUNT(b.id)::BIGINT AS barber_count
+        FROM public.barbers b
+        WHERE b.is_active = true
+        GROUP BY b.shop_id
+    ),
+    queue_counts AS (
+        SELECT 
+            qe.shop_id AS q_shop_id,
+            COUNT(CASE WHEN qe.status = 'waiting' THEN 1 END)::BIGINT AS waiting_cnt,
+            COUNT(CASE WHEN qe.status = 'in_service' THEN 1 END)::BIGINT AS in_service_cnt,
+            COALESCE(SUM(s.avg_minutes), 0)::BIGINT AS total_duration
+        FROM public.queue_entries qe
+        JOIN public.services s ON qe.service_id = s.id
+        WHERE qe.status IN ('waiting', 'in_service')
+        GROUP BY qe.shop_id
+    )
+    SELECT 
+        sh.id AS shop_id,
+        COALESCE(qc.waiting_cnt, 0)::BIGINT AS waiting_count,
+        COALESCE(qc.in_service_cnt, 0)::BIGINT AS in_service_count,
+        GREATEST(COALESCE(ab.barber_count, 1), 1)::BIGINT AS active_barbers_count,
+        (CEIL(COALESCE(qc.total_duration, 0)::NUMERIC / GREATEST(COALESCE(ab.barber_count, 1), 1)))::BIGINT AS estimated_wait_minutes
+    FROM public.shops sh
+    LEFT JOIN queue_counts qc ON sh.id = qc.q_shop_id
+    LEFT JOIN active_barbers_per_shop ab ON sh.id = ab.b_shop_id
+    WHERE sh.status = 'approved';
+END;
+$$ LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp;
+
+REVOKE ALL ON FUNCTION public.get_shops_queue_summary() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.get_shops_queue_summary() TO anon, authenticated, service_role;
+
+CREATE OR REPLACE FUNCTION public.get_estimated_wait_time(target_queue_entry_id UUID)
+RETURNS JSONB AS $$
+DECLARE
+    v_shop_id UUID;
+    v_created_at TIMESTAMPTZ;
+    v_status queue_status;
+    v_active_barbers INTEGER := 1;
+    v_total_wait_minutes INTEGER := 0;
+    v_people_ahead INTEGER := 0;
+    v_estimated_minutes INTEGER := 0;
+BEGIN
+    SELECT shop_id, created_at, status
+    INTO v_shop_id, v_created_at, v_status
+    FROM public.queue_entries
+    WHERE id = target_queue_entry_id;
+
+    IF NOT FOUND THEN
+        RETURN jsonb_build_object(
+            'estimated_minutes', 0,
+            'people_ahead', 0,
+            'status', 'not_found',
+            'is_estimate', true
+        );
+    END IF;
+
+    IF v_status != 'waiting' THEN
+        RETURN jsonb_build_object(
+            'estimated_minutes', 0,
+            'people_ahead', 0,
+            'status', v_status,
+            'is_estimate', true
+        );
+    END IF;
+
+    SELECT GREATEST(COUNT(*), 1)
+    INTO v_active_barbers
+    FROM public.barbers
+    WHERE shop_id = v_shop_id AND is_active = true;
+
+    SELECT 
+        COALESCE(SUM(s.avg_minutes), 0),
+        COUNT(qe.id)
+    INTO v_total_wait_minutes, v_people_ahead
+    FROM public.queue_entries qe
+    JOIN public.services s ON qe.service_id = s.id
+    WHERE qe.shop_id = v_shop_id
+      AND (
+          (qe.status = 'waiting' AND qe.created_at < v_created_at)
+          OR (qe.status = 'in_service')
+      );
+
+    v_estimated_minutes := CEIL(v_total_wait_minutes::NUMERIC / v_active_barbers);
+
+    RETURN jsonb_build_object(
+        'estimated_minutes', v_estimated_minutes,
+        'people_ahead', v_people_ahead,
+        'active_barbers', v_active_barbers,
+        'status', 'waiting',
+        'is_estimate', true,
+        'disclaimer', 'Estimated wait time is dynamically calculated based on queue progress and active barbers.'
+    );
+END;
+$$ LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp;
+
+REVOKE ALL ON FUNCTION public.get_estimated_wait_time(UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.get_estimated_wait_time(UUID) TO anon, authenticated, service_role;
+
+CREATE OR REPLACE FUNCTION public.verify_qr_checkin(
+    p_entry_id UUID,
+    p_qr_token TEXT
+)
+RETURNS JSONB AS $$
+DECLARE
+    v_entry public.queue_entries%ROWTYPE;
+    v_is_staff BOOLEAN;
+    v_is_owner BOOLEAN;
+    v_is_admin BOOLEAN;
+    v_is_customer BOOLEAN;
+    v_token_clean TEXT;
+    v_json_payload JSONB;
+    v_token_matched BOOLEAN := false;
+BEGIN
+    SELECT * INTO v_entry
+    FROM public.queue_entries
+    WHERE id = p_entry_id
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Queue entry ticket not found.';
+    END IF;
+
+    v_is_admin := public.is_admin();
+    v_is_staff := public.is_shop_staff(v_entry.shop_id);
+    v_is_owner := public.is_shop_owner(v_entry.shop_id);
+    v_is_customer := (auth.uid() = v_entry.customer_id);
+
+    IF NOT (v_is_admin OR v_is_staff OR v_is_owner OR v_is_customer) THEN
+        RAISE EXCEPTION 'Unauthorized: Caller cannot check in this queue entry.';
+    END IF;
+
+    IF v_entry.checked_in_at IS NOT NULL THEN
+        RETURN jsonb_build_object(
+            'success', true,
+            'entry_id', p_entry_id,
+            'queue_number', v_entry.queue_number,
+            'checked_in_at', v_entry.checked_in_at,
+            'already_checked_in', true
+        );
+    END IF;
+
+    IF v_entry.status != 'waiting' THEN
+        RAISE EXCEPTION 'Ticket #% cannot be checked in because its status is "%".', v_entry.queue_number, v_entry.status;
+    END IF;
+
+    v_token_clean := TRIM(p_qr_token);
+
+    IF v_token_clean LIKE '{%' THEN
+        BEGIN
+            v_json_payload := v_token_clean::jsonb;
+            IF (v_json_payload->>'platform') = 'QuickCut'
+               AND (v_json_payload->>'entryId') = v_entry.id::text
+               AND (v_json_payload->>'shopId') = v_entry.shop_id::text
+               AND (v_json_payload->>'token') = v_entry.qr_code_token::text
+            THEN
+                v_token_matched := true;
+            END IF;
+        EXCEPTION WHEN OTHERS THEN
+            v_token_matched := false;
+        END;
+    END IF;
+
+    IF NOT v_token_matched THEN
+        IF v_entry.qr_code_token::text = v_token_clean THEN
+            v_token_matched := true;
+        ELSIF (v_is_staff OR v_is_owner OR v_is_admin) THEN
+            IF v_entry.queue_number::text = v_token_clean
+               OR (length(v_token_clean) >= 4 AND v_entry.qr_code_token::text ILIKE ('%' || v_token_clean || '%'))
+            THEN
+                v_token_matched := true;
+            END IF;
+        END IF;
+    END IF;
+
+    IF NOT v_token_matched THEN
+        IF v_is_customer THEN
+            RAISE EXCEPTION 'Invalid check-in QR code. Please scan the official QR code displayed at the barbershop.';
+        ELSE
+            RAISE EXCEPTION 'Invalid check-in QR code or token for Ticket #%.', v_entry.queue_number;
+        END IF;
+    END IF;
+
+    UPDATE public.queue_entries
+    SET checked_in_at = timezone('utc'::text, now()),
+        updated_at = timezone('utc'::text, now())
+    WHERE id = p_entry_id;
+
+    RETURN jsonb_build_object(
+        'success', true,
+        'entry_id', p_entry_id,
+        'queue_number', v_entry.queue_number,
+        'checked_in_at', timezone('utc'::text, now()),
+        'already_checked_in', false
+    );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
+
+REVOKE ALL ON FUNCTION public.verify_qr_checkin(UUID, TEXT) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.verify_qr_checkin(UUID, TEXT) TO authenticated, service_role;
+
+CREATE OR REPLACE FUNCTION public.start_service_atomic(
+    p_entry_id UUID,
+    p_barber_id UUID DEFAULT NULL
+)
+RETURNS JSONB AS $$
+DECLARE
+    v_entry public.queue_entries%ROWTYPE;
+    v_shop_id UUID;
+    v_existing_active_count INTEGER := 0;
+    v_barber_count INTEGER := 0;
+BEGIN
+    SELECT * INTO v_entry
+    FROM public.queue_entries
+    WHERE id = p_entry_id
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Queue entry not found.';
+    END IF;
+
+    v_shop_id := v_entry.shop_id;
+
+    IF NOT (public.is_admin() OR public.is_shop_staff(v_shop_id) OR public.is_shop_owner(v_shop_id)) THEN
+        RAISE EXCEPTION 'Unauthorized to start service for this shop.';
+    END IF;
+
+    IF v_entry.status != 'waiting' THEN
+        RAISE EXCEPTION 'Cannot start service: Ticket #% is already "%".', v_entry.queue_number, v_entry.status;
+    END IF;
+
+    SELECT COUNT(*) INTO v_barber_count FROM public.barbers WHERE shop_id = v_shop_id AND is_active = true;
+
+    IF p_barber_id IS NOT NULL THEN
+        IF NOT EXISTS (
+            SELECT 1 FROM public.barbers 
+            WHERE id = p_barber_id AND shop_id = v_shop_id AND is_active = true
+        ) THEN
+            RAISE EXCEPTION 'Selected barber does not belong to this shop or is inactive.';
+        END IF;
+
+        SELECT COUNT(*) INTO v_existing_active_count
+        FROM public.queue_entries
+        WHERE shop_id = v_shop_id
+          AND barber_id = p_barber_id
+          AND status = 'in_service';
+        
+        IF v_existing_active_count > 0 THEN
+            RAISE EXCEPTION 'This barber already has an active client in service.';
+        END IF;
+    ELSE
+        SELECT COUNT(*) INTO v_existing_active_count
+        FROM public.queue_entries
+        WHERE shop_id = v_shop_id
+          AND status = 'in_service';
+
+        IF v_existing_active_count >= GREATEST(v_barber_count, 1) THEN
+            RAISE EXCEPTION 'All chairs in this shop are currently occupied with active clients.';
+        END IF;
+    END IF;
+
+    UPDATE public.queue_entries
+    SET status = 'in_service',
+        called_at = timezone('utc'::text, now()),
+        barber_id = COALESCE(p_barber_id, barber_id),
+        updated_at = timezone('utc'::text, now())
+    WHERE id = p_entry_id;
+
+    RETURN jsonb_build_object(
+        'success', true,
+        'entry_id', p_entry_id,
+        'status', 'in_service',
+        'queue_number', v_entry.queue_number
+    );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
+
+REVOKE ALL ON FUNCTION public.start_service_atomic(UUID, UUID) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.start_service_atomic(UUID, UUID) TO authenticated, service_role;
+
+DROP POLICY IF EXISTS "audit_logs_insert_policy" ON public.audit_logs;
+CREATE POLICY "audit_logs_insert_policy" ON public.audit_logs
+FOR INSERT WITH CHECK (
+    public.is_admin()
+);
+
+CREATE INDEX IF NOT EXISTS idx_support_tickets_shop_status ON public.support_tickets(shop_id, status);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_action_created ON public.audit_logs(action, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_queue_entries_wait_calc ON public.queue_entries(shop_id, status, created_at);
 
 -- 7. Ensure schema permissions, re-enforce Stage B column privileges, and reload PostgREST
 GRANT USAGE ON SCHEMA public TO postgres, anon, authenticated, service_role;
