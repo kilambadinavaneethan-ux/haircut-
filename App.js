@@ -5,293 +5,285 @@ import {
   Text,
   TouchableOpacity,
   SafeAreaView,
-  Linking,
   ScrollView,
   Platform
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import CustomerApp from './apps/customer/App';
 import StaffApp from './apps/staff/App';
+import AdminMobileApp from './apps/admin-mobile/App';
 
 /**
  * QuickCut Monorepo Unified Root Entry Point
  *
- * Provides an instant multi-app switcher when `expo start` is run at the monorepo root:
- * - 📱 Customer Mobile App (Queue discovery, wait-times, personal QR pass)
- * - 💈 Staff Barber Station (Queue management, QR pass scanner, seat/complete customers)
- * - 👑 Admin & Owner Portals (Super Admin Web Portal and Shop Owner Dashboard links & guide)
+ * Each application is a complete, standalone mobile app:
+ * - 📱 Customer App (apps/customer)
+ * - 💈 Staff App (apps/staff)
+ * - 👑 Admin Mobile App (apps/admin-mobile)
+ *
+ * To launch any app directly without this selector:
+ *   npm run customer   (or npm run dev:customer)
+ *   npm run staff      (or npm run dev:staff)
+ *   npm run admin      (or npm run dev:admin:mobile)
  */
 export default function RootMonorepoApp() {
-  const [activeApp, setActiveApp] = useState('customer'); // 'customer' | 'staff' | 'admin'
+  const target = process.env.EXPO_PUBLIC_APP_TARGET;
+  const [selectedApp, setSelectedApp] = useState(target || null);
 
-  return (
-    <View style={styles.rootContainer}>
-      <StatusBar style="light" />
-
-      {/* Main Content Area */}
-      <View style={styles.appContainer}>
-        {activeApp === 'customer' && <CustomerApp />}
-        {activeApp === 'staff' && <StaffApp />}
-        {activeApp === 'admin' && (
-          <SafeAreaView style={styles.adminWrapper}>
-            <ScrollView contentContainerStyle={styles.adminScroll}>
-              <View style={styles.crownBadge}>
-                <Text style={styles.crownText}>👑</Text>
-              </View>
-              <Text style={styles.portalTitle}>QuickCut Admin Station</Text>
-              <Text style={styles.portalSubtitle}>
-                Super Admin & Shop Owner Portals are desktop & tablet web applications built with React and Vite.
-              </Text>
-
-              {/* Super Admin Card */}
-              <View style={styles.portalCard}>
-                <View style={styles.cardHeaderRow}>
-                  <Text style={styles.portalCardBadge}>PORT 3002</Text>
-                  <Text style={styles.portalCardTitle}>Super Admin Dashboard</Text>
-                </View>
-                <Text style={styles.portalCardDesc}>
-                  Approve new barbershops, inspect multi-role audit logs, configure platform rules, and investigate queue anomalies.
-                </Text>
-                <TouchableOpacity
-                  style={styles.actionBtn}
-                  onPress={() => Linking.openURL('http://localhost:3002')}
-                >
-                  <Text style={styles.actionBtnText}>Launch Admin Web Portal</Text>
-                </TouchableOpacity>
-                <View style={styles.credsBox}>
-                  <Text style={styles.credsLabel}>Seed Admin Account:</Text>
-                  <Text style={styles.credsValue}>admin@quickcut.com  •  Password123!</Text>
-                </View>
-              </View>
-
-              {/* Shop Owner Card */}
-              <View style={styles.portalCard}>
-                <View style={styles.cardHeaderRow}>
-                  <Text style={[styles.portalCardBadge, { backgroundColor: '#3B82F6' }]}>PORT 3001</Text>
-                  <Text style={styles.portalCardTitle}>Shop Owner Dashboard</Text>
-                </View>
-                <Text style={styles.portalCardDesc}>
-                  Manage shop haircut services, assign barbers, monitor real-time queue length, and view earnings.
-                </Text>
-                <TouchableOpacity
-                  style={[styles.actionBtn, { backgroundColor: '#3B82F6' }]}
-                  onPress={() => Linking.openURL('http://localhost:3001')}
-                >
-                  <Text style={styles.actionBtnText}>Launch Owner Web Portal</Text>
-                </TouchableOpacity>
-                <View style={styles.credsBox}>
-                  <Text style={styles.credsLabel}>Seed Owner Account:</Text>
-                  <Text style={styles.credsValue}>owner.vikram@quickcut.com  •  Password123!</Text>
-                </View>
-              </View>
-
-              {/* Terminal Quick Start */}
-              <View style={styles.terminalBox}>
-                <Text style={styles.terminalHeader}>💻 Start from Terminal:</Text>
-                <Text style={styles.terminalLine}>npm run dev:admin  # Admin Web (Port 3002)</Text>
-                <Text style={styles.terminalLine}>npm run dev:owner  # Owner Web (Port 3001)</Text>
-                <Text style={styles.terminalLine}>npm run dev:all    # All 4 apps at once</Text>
-              </View>
-            </ScrollView>
-          </SafeAreaView>
-        )}
+  // 1. Standalone Customer App (100% full screen, zero switcher tabs)
+  if (selectedApp === 'customer') {
+    return (
+      <View style={styles.fullScreenWrapper}>
+        <CustomerApp />
+        <TouchableOpacity
+          style={styles.exitPill}
+          onPress={() => setSelectedApp(null)}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.exitPillText}>⎋ Switch App</Text>
+        </TouchableOpacity>
       </View>
+    );
+  }
 
-      {/* Floating App Switcher Bar */}
-      <SafeAreaView style={styles.switcherSafeArea}>
-        <View style={styles.switcherBar}>
-          <TouchableOpacity
-            style={[styles.switcherTab, activeApp === 'customer' && styles.switcherTabActive]}
-            onPress={() => setActiveApp('customer')}
-          >
-            <Text style={[styles.tabLabel, activeApp === 'customer' && styles.tabLabelActive]}>
-              📱 Customer
-            </Text>
-          </TouchableOpacity>
+  // 2. Standalone Staff App (100% full screen, zero switcher tabs)
+  if (selectedApp === 'staff') {
+    return (
+      <View style={styles.fullScreenWrapper}>
+        <StaffApp />
+        <TouchableOpacity
+          style={styles.exitPill}
+          onPress={() => setSelectedApp(null)}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.exitPillText}>⎋ Switch App</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
-          <TouchableOpacity
-            style={[styles.switcherTab, activeApp === 'staff' && styles.switcherTabActive]}
-            onPress={() => setActiveApp('staff')}
-          >
-            <Text style={[styles.tabLabel, activeApp === 'staff' && styles.tabLabelActive]}>
-              💈 Staff App
-            </Text>
-          </TouchableOpacity>
+  // 3. Standalone Admin Mobile App (100% full screen, zero switcher tabs)
+  if (selectedApp === 'admin') {
+    return (
+      <View style={styles.fullScreenWrapper}>
+        <AdminMobileApp />
+        <TouchableOpacity
+          style={styles.exitPill}
+          onPress={() => setSelectedApp(null)}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.exitPillText}>⎋ Switch App</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
-          <TouchableOpacity
-            style={[styles.switcherTab, activeApp === 'admin' && styles.switcherTabActive]}
-            onPress={() => setActiveApp('admin')}
-          >
-            <Text style={[styles.tabLabel, activeApp === 'admin' && styles.tabLabelActive]}>
-              👑 Admin Web
-            </Text>
-          </TouchableOpacity>
+  // 4. Clean App Selector (Shown when root `expo start` is run without target)
+  return (
+    <SafeAreaView style={styles.container}>
+      <StatusBar style="light" />
+      <ScrollView contentContainerStyle={styles.scroll}>
+        <View style={styles.header}>
+          <Text style={styles.brandTitle}>QuickCut Apps</Text>
+          <Text style={styles.brandSubtitle}>
+            Select which separate application to open:
+          </Text>
         </View>
-      </SafeAreaView>
-    </View>
+
+        {/* Option 1: Customer App */}
+        <TouchableOpacity
+          style={styles.appCard}
+          onPress={() => setSelectedApp('customer')}
+          activeOpacity={0.85}
+        >
+          <View style={styles.iconCircle}>
+            <Text style={styles.cardEmoji}>📱</Text>
+          </View>
+          <View style={styles.cardDetails}>
+            <Text style={styles.cardTitle}>Customer Mobile App</Text>
+            <Text style={styles.cardDesc}>
+              Barbershop discovery, live queue wait-times, and personal QR arrival pass.
+            </Text>
+            <View style={styles.badgeRow}>
+              <Text style={styles.badgeCustomer}>Separate Customer App</Text>
+            </View>
+          </View>
+        </TouchableOpacity>
+
+        {/* Option 2: Staff App */}
+        <TouchableOpacity
+          style={styles.appCard}
+          onPress={() => setSelectedApp('staff')}
+          activeOpacity={0.85}
+        >
+          <View style={[styles.iconCircle, { borderColor: '#3B82F6' }]}>
+            <Text style={styles.cardEmoji}>💈</Text>
+          </View>
+          <View style={styles.cardDetails}>
+            <Text style={styles.cardTitle}>Staff Barber Station</Text>
+            <Text style={styles.cardDesc}>
+              Manage shop queue, call next customer, QR arrival pass scanner, and walk-ins.
+            </Text>
+            <View style={styles.badgeRow}>
+              <Text style={styles.badgeStaff}>Separate Staff App</Text>
+            </View>
+          </View>
+        </TouchableOpacity>
+
+        {/* Option 3: Admin Mobile App */}
+        <TouchableOpacity
+          style={styles.appCard}
+          onPress={() => setSelectedApp('admin')}
+          activeOpacity={0.85}
+        >
+          <View style={[styles.iconCircle, { borderColor: '#F59E0B' }]}>
+            <Text style={styles.cardEmoji}>👑</Text>
+          </View>
+          <View style={styles.cardDetails}>
+            <Text style={styles.cardTitle}>Super Admin Mobile App</Text>
+            <Text style={styles.cardDesc}>
+              Approve new barbershops, live platform analytics, tamper audit logs, and tickets.
+            </Text>
+            <View style={styles.badgeRow}>
+              <Text style={styles.badgeAdmin}>Separate Admin App</Text>
+            </View>
+          </View>
+        </TouchableOpacity>
+
+        {/* Terminal Commands Guide */}
+        <View style={styles.terminalBox}>
+          <Text style={styles.terminalTitle}>💻 Run Separately From Terminal:</Text>
+          <Text style={styles.terminalCode}>npm run customer  # Customer App (Port 8081)</Text>
+          <Text style={styles.terminalCode}>npm run staff     # Staff Barber App (Port 8082)</Text>
+          <Text style={styles.terminalCode}>npm run admin     # Admin Mobile App (Port 8083)</Text>
+          <Text style={styles.terminalCode}>npm run dev:admin # Admin Web Portal (Port 3002)</Text>
+        </View>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  rootContainer: {
+  fullScreenWrapper: {
     flex: 1,
-    backgroundColor: '#0F172A'
+    backgroundColor: '#090D16'
   },
-  appContainer: {
-    flex: 1
-  },
-  switcherSafeArea: {
-    backgroundColor: '#090D16',
-    borderTopWidth: 1,
-    borderTopColor: '#1E293B'
-  },
-  switcherBar: {
-    flexDirection: 'row',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    backgroundColor: '#090D16',
-    justifyContent: 'space-around'
-  },
-  switcherTab: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: 10,
-    alignItems: 'center',
-    marginHorizontal: 4,
-    backgroundColor: '#1E293B'
-  },
-  switcherTabActive: {
-    backgroundColor: '#F59E0B'
-  },
-  tabLabel: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#94A3B8'
-  },
-  tabLabelActive: {
-    color: '#0F172A'
-  },
-  adminWrapper: {
-    flex: 1,
-    backgroundColor: '#0F172A'
-  },
-  adminScroll: {
-    padding: 20,
-    alignItems: 'center'
-  },
-  crownBadge: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: 'rgba(245, 158, 11, 0.15)',
-    justifyContent: 'center',
-    alignItems: 'center',
+  exitPill: {
+    position: 'absolute',
+    top: 50,
+    right: 16,
+    backgroundColor: 'rgba(15, 23, 42, 0.88)',
     borderWidth: 1,
-    borderColor: '#F59E0B',
-    marginTop: 16,
-    marginBottom: 12
+    borderColor: '#334155',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    zIndex: 9999
   },
-  crownText: {
-    fontSize: 32
+  exitPillText: {
+    color: '#CBD5E1',
+    fontSize: 11,
+    fontWeight: '700'
   },
-  portalTitle: {
-    fontSize: 24,
+  container: {
+    flex: 1,
+    backgroundColor: '#090D16'
+  },
+  scroll: {
+    padding: 20,
+    paddingTop: 36
+  },
+  header: {
+    alignItems: 'center',
+    marginBottom: 24
+  },
+  brandTitle: {
+    fontSize: 26,
     fontWeight: '800',
-    color: '#F8FAFC',
-    textAlign: 'center'
+    color: '#F8FAFC'
   },
-  portalSubtitle: {
+  brandSubtitle: {
     fontSize: 14,
     color: '#94A3B8',
-    textAlign: 'center',
-    marginTop: 6,
-    marginBottom: 24,
-    lineHeight: 20
+    marginTop: 6
   },
-  portalCard: {
-    width: '100%',
-    backgroundColor: '#1E293B',
+  appCard: {
+    flexDirection: 'row',
+    backgroundColor: '#111827',
     borderRadius: 16,
-    padding: 20,
+    padding: 18,
     marginBottom: 16,
     borderWidth: 1,
-    borderColor: '#334155'
+    borderColor: '#1F2937',
+    alignItems: 'center'
   },
-  cardHeaderRow: {
-    flexDirection: 'row',
+  iconCircle: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#1E293B',
+    borderWidth: 2,
+    borderColor: '#10B981',
+    justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 8
+    marginRight: 16
   },
-  portalCardBadge: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: '#FFFFFF',
-    backgroundColor: '#F59E0B',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 6,
-    marginRight: 10
+  cardEmoji: {
+    fontSize: 26
   },
-  portalCardTitle: {
-    fontSize: 18,
+  cardDetails: {
+    flex: 1
+  },
+  cardTitle: {
+    fontSize: 17,
     fontWeight: '700',
     color: '#F8FAFC'
   },
-  portalCardDesc: {
-    fontSize: 13,
-    color: '#94A3B8',
-    lineHeight: 19,
-    marginBottom: 16
-  },
-  actionBtn: {
-    backgroundColor: '#F59E0B',
-    paddingVertical: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-    marginBottom: 12
-  },
-  actionBtnText: {
-    color: '#0F172A',
-    fontWeight: '800',
-    fontSize: 14
-  },
-  credsBox: {
-    backgroundColor: '#0F172A',
-    padding: 10,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#334155'
-  },
-  credsLabel: {
-    color: '#64748B',
-    fontSize: 11,
-    fontWeight: '600'
-  },
-  credsValue: {
-    color: '#CBD5E1',
+  cardDesc: {
     fontSize: 12,
+    color: '#94A3B8',
+    lineHeight: 16,
+    marginTop: 4
+  },
+  badgeRow: {
+    marginTop: 8
+  },
+  badgeCustomer: {
+    color: '#10B981',
+    fontSize: 10,
     fontWeight: '700',
-    marginTop: 2
+    textTransform: 'uppercase'
+  },
+  badgeStaff: {
+    color: '#60A5FA',
+    fontSize: 10,
+    fontWeight: '700',
+    textTransform: 'uppercase'
+  },
+  badgeAdmin: {
+    color: '#F59E0B',
+    fontSize: 10,
+    fontWeight: '700',
+    textTransform: 'uppercase'
   },
   terminalBox: {
-    width: '100%',
-    backgroundColor: '#090D16',
+    marginTop: 16,
+    backgroundColor: '#0B0F19',
     borderRadius: 12,
     padding: 16,
     borderWidth: 1,
-    borderColor: '#1E293B',
-    marginTop: 8
+    borderColor: '#1E293B'
   },
-  terminalHeader: {
+  terminalTitle: {
     color: '#F59E0B',
+    fontSize: 12,
     fontWeight: '700',
-    fontSize: 13,
     marginBottom: 8
   },
-  terminalLine: {
+  terminalCode: {
     color: '#10B981',
+    fontSize: 11,
     fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
-    fontSize: 12,
     marginBottom: 4
   }
 });
