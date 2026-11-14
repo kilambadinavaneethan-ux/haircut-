@@ -8,6 +8,7 @@
     "apps/*"
   ],
   "scripts": {
+    "start": "npm run dev:customer",
     "dev:all": "node scripts/dev-all.js",
     "dev:admin": "npm run dev --workspace=@quickcut/admin",
     "dev:owner": "npm run dev --workspace=@quickcut/owner",
