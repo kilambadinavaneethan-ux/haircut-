@@ -222,7 +222,12 @@ export default function CustomerApp() {
       <SafeAreaView style={styles.container}>
         <StatusBar style="light" />
         <AuthScreen
-          onAuthSuccess={async () => {
+          onAuthSuccess={async (authenticatedUser) => {
+            if (authenticatedUser) {
+              setSessionUser(authenticatedUser);
+              await loadUserProfile(authenticatedUser.id);
+              return;
+            }
             const { data: { session } } = await supabase.auth.getSession();
             if (session?.user) {
               setSessionUser({ id: session.user.id, email: session.user.email || '' });

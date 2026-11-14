@@ -13,7 +13,7 @@ import {
 import { getSupabaseClient } from '@quickcut/shared';
 
 interface AuthScreenProps {
-  onAuthSuccess: () => void;
+  onAuthSuccess: (user?: { id: string; email: string }) => void;
 }
 
 export function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
@@ -24,11 +24,13 @@ export function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
   const [phone, setPhone] = useState('');
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const supabase = getSupabaseClient();
 
   const handleAuth = async () => {
     setErrorMessage(null);
+    setSuccessMessage(null);
 
     if (!email.trim() || !password.trim()) {
       setErrorMessage('Please enter both email and password.');
@@ -37,6 +39,11 @@ export function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
 
     if (isSignUp && !fullName.trim()) {
       setErrorMessage('Please enter your full name.');
+      return;
+    }
+
+    if (password.length < 6) {
+      setErrorMessage('Password must be at least 6 characters long.');
       return;
     }
 
@@ -57,8 +64,38 @@ export function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
         });
 
         if (error) throw error;
+
+        // 1. If Supabase immediately returns a session (auto-confirm enabled)
+        if (data.session?.user) {
+          onAuthSuccess({ id: data.session.user.id, email: data.session.user.email || '' });
+          return;
+        }
+
+        // 2. Check if account already exists
+        if (data.user && data.user.identities && data.user.identities.length === 0) {
+          setIsSignUp(false);
+          setErrorMessage('An account with this email already exists. Please sign in with your password.');
+          return;
+        }
+
+        // 3. Try immediate sign-in to check if session can be established
+        const { data: signInData } = await supabase.auth.signInWithPassword({
+          email: email.trim(),
+          password: password
+        });
+
+        if (signInData?.session?.user) {
+          onAuthSuccess({ id: signInData.session.user.id, email: signInData.session.user.email || '' });
+          return;
+        }
+
+        // 4. If Supabase requires email verification
         if (data.user) {
-          onAuthSuccess();
+          setIsSignUp(false);
+          setSuccessMessage(
+            'Account created! A confirmation link was sent to your email. You can verify it or sign in directly.'
+          );
+          return;
         }
       } else {
         // Login with Supabase Auth
@@ -69,13 +106,22 @@ export function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
 
         if (error) throw error;
         if (data.user) {
-          onAuthSuccess();
+          onAuthSuccess({ id: data.user.id, email: data.user.email || '' });
         }
       }
     } catch (err: unknown) {
       let message = err instanceof Error ? err.message : 'Authentication failed';
       if (message.includes('Database error querying schema')) {
         message = 'Database error querying schema: auth.users has NULL token columns from raw SQL seeding. Run "supabase/fix_auth_schema.sql" in your Supabase SQL Editor to patch it in 1 second.';
+      } else if (message.includes('over_email_send_rate_limit') || message.includes('email rate limit exceeded')) {
+        message = 'Email rate limit reached (Supabase free tier: max 3 emails/hour). You can sign in using one of the instant test accounts below or disable "Confirm email" in Supabase Auth Settings.';
+      } else if (message.includes('User already registered')) {
+        setIsSignUp(false);
+        message = 'An account with this email already exists. Please sign in with your password.';
+      } else if (message.includes('Email not confirmed')) {
+        message = 'Your email address has not been confirmed yet. Please check your inbox or sign in with Rahul/Priya below.';
+      } else if (message.includes('Invalid login credentials')) {
+        message = 'Invalid email or password. Please double-check your credentials.';
       }
       setErrorMessage(message);
     } finally {
@@ -125,6 +171,12 @@ export function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
           {errorMessage && (
             <View style={styles.errorBox}>
               <Text style={styles.errorText}>{errorMessage}</Text>
+            </View>
+          )}
+
+          {successMessage && (
+            <View style={styles.successBox}>
+              <Text style={styles.successText}>{successMessage}</Text>
             </View>
           )}
 
@@ -211,26 +263,24 @@ export function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
           </TouchableOpacity>
         </View>
 
-        {/* Demo Fast Fill Section (Development Only) */}
-        {__DEV__ && (
-          <View style={styles.demoBox}>
-            <Text style={styles.demoTitle}>Quick Fill Seed Accounts:</Text>
-            <View style={styles.demoButtonsRow}>
-              <TouchableOpacity
-                style={styles.demoBtn}
-                onPress={() => fillTestCustomer(1)}
-              >
-                <Text style={styles.demoBtnText}>Rahul Sharma</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.demoBtn}
-                onPress={() => fillTestCustomer(2)}
-              >
-                <Text style={styles.demoBtnText}>Priya Patel</Text>
-              </TouchableOpacity>
-            </View>
+        {/* Instant One-Tap Customer Access */}
+        <View style={styles.demoBox}>
+          <Text style={styles.demoTitle}>Instant One-Tap Test Account:</Text>
+          <View style={styles.demoButtonsRow}>
+            <TouchableOpacity
+              style={styles.demoBtn}
+              onPress={() => fillTestCustomer(1)}
+            >
+              <Text style={styles.demoBtnText}>Rahul Sharma</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.demoBtn}
+              onPress={() => fillTestCustomer(2)}
+            >
+              <Text style={styles.demoBtnText}>Priya Patel</Text>
+            </TouchableOpacity>
           </View>
-        )}
+        </View>
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -302,6 +352,19 @@ const styles = StyleSheet.create({
   },
   errorText: {
     color: '#EF4444',
+    fontSize: 13,
+    fontWeight: '600'
+  },
+  successBox: {
+    backgroundColor: 'rgba(34, 197, 94, 0.15)',
+    borderWidth: 1,
+    borderColor: '#22C55E',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 16
+  },
+  successText: {
+    color: '#22C55E',
     fontSize: 13,
     fontWeight: '600'
   },
