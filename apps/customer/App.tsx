@@ -128,23 +128,17 @@ export default function CustomerApp() {
 
       if (shopsError) throw shopsError;
 
-      // Fetch active queue counts per shop
-      const { data: queueData, error: queueError } = await supabase
-        .from('queue_entries')
-        .select('shop_id, status, service:services(avg_minutes)')
-        .in('status', ['waiting', 'in_service']);
-
-      if (queueError) throw queueError;
+      // Fetch privacy-preserving aggregate queue metrics per shop via RPC
+      const { data: queueSummary, error: queueError } = await (supabase.rpc as any)('get_shops_queue_summary');
 
       const shopInfoMap: Record<string, { count: number; totalWait: number }> = {};
 
-      if (queueData) {
-        queueData.forEach((entry: any) => {
-          if (!shopInfoMap[entry.shop_id]) {
-            shopInfoMap[entry.shop_id] = { count: 0, totalWait: 0 };
-          }
-          shopInfoMap[entry.shop_id].count += 1;
-          shopInfoMap[entry.shop_id].totalWait += entry.service?.avg_minutes || 20;
+      if (!queueError && queueSummary) {
+        queueSummary.forEach((row: any) => {
+          shopInfoMap[row.shop_id] = {
+            count: Number(row.waiting_count) || 0,
+            totalWait: Number(row.estimated_wait_minutes) || 0
+          };
         });
       }
 

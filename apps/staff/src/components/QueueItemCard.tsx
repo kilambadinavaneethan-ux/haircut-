@@ -85,12 +85,12 @@ export function QueueItemCard({
         </TouchableOpacity>
       </View>
 
-      {/* Prominent Billing Invariant Warning for online bookings without QR arrival */}
+      {/* Arrival Verification Reminder for online bookings without QR arrival */}
       {showBillingWarning && (
         <View style={styles.billingWarningBox}>
-          <Text style={styles.billingWarningTitle}>⚠️ Non-Checked-In Booking Warning</Text>
+          <Text style={styles.billingWarningTitle}>⚠️ Arrival Not Checked In</Text>
           <Text style={styles.billingWarningDesc}>
-            Customer has NOT scanned QR check-in. Under platform rules, completing this service will <Text style={{ fontWeight: '800' }}>NOT count for platform billing</Text>.
+            Customer has not scanned QR check-in. Please verify arrival when they enter the shop.
           </Text>
         </View>
       )}

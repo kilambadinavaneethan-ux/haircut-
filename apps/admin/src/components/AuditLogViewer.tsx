@@ -38,7 +38,7 @@ export default function AuditLogViewer({ logs }: AuditLogViewerProps) {
         <div>
           <h2 style={{ fontSize: 20, fontWeight: 800 }}>Platform Security & Audit Trail</h2>
           <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-            Tamper-evident chronological ledger of all administrative interventions, fee waivers, and shop state changes.
+            Tamper-evident chronological ledger of all administrative interventions, account updates, and shop state changes.
           </p>
         </div>
 

@@ -9,10 +9,10 @@ export const PLATFORM_CONFIG = {
     SYMBOL: '₹',
     LABEL: 'Rs'
   },
-  // Platform fee in INR per billable service completion
-  BILLABLE_FEE_PER_SERVICE: 5.0,
-  // Allowed window for shop owners to dispute monthly billing invoices
-  DISPUTE_WINDOW_DAYS: 7,
+  // QuickCut operates with ZERO platform fees (₹0 per service, ₹0 monthly subscription, ₹0 commission)
+  BILLABLE_FEE_PER_SERVICE: 0.0,
+  // Dispute window deactivated under zero platform fee policy
+  DISPUTE_WINDOW_DAYS: 0,
   // Default interval in ms for polling queue if realtime reconnects
   QUEUE_FALLBACK_POLL_INTERVAL_MS: 15000,
   // Minimum average service minutes

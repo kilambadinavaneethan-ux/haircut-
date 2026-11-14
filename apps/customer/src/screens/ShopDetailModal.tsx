@@ -172,7 +172,8 @@ export function ShopDetailModal({
       if (
         message.includes('uq_active_customer_queue') ||
         message.includes('already holds an active') ||
-        message.includes('duplicate')
+        message.includes('duplicate') ||
+        message.includes('23505')
       ) {
         message = 'You already have an active queue ticket in progress across the platform.';
       }

@@ -242,7 +242,7 @@ export default function PlatformActivity({
                   <th>Customer</th>
                   <th>Service</th>
                   <th>QR Check-in</th>
-                  <th>Billable (₹5 Fee)</th>
+                  <th>Booking Source</th>
                   <th>Completed Time</th>
                 </tr>
               </thead>
@@ -270,11 +270,13 @@ export default function PlatformActivity({
                         )}
                       </td>
                       <td>
-                        {e.is_billable ? (
-                          <span className="badge badge-paid">₹5.00 Billable</span>
+                        {e.is_walkin ? (
+                          <span className="badge" style={{ background: 'rgba(59, 130, 246, 0.15)', color: 'var(--accent-blue)' }}>
+                            Walk-in
+                          </span>
                         ) : (
-                          <span className="badge" style={{ background: 'rgba(255,255,255,0.06)', color: 'var(--text-muted)' }}>
-                            {e.is_walkin ? 'Walk-in (Exempt)' : 'Exempt'}
+                          <span className="badge badge-paid">
+                            Online Booking
                           </span>
                         )}
                       </td>

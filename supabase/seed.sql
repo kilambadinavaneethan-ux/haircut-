@@ -1,5 +1,37 @@
--- QuickCut Platform - Seed Script
+-- ============================================================================
+-- QuickCut Platform - Development & Test Seed Script
 -- File: supabase/seed.sql
+-- ============================================================================
+--
+-- ⚠️  CRITICAL SECURITY WARNING:
+-- This file contains mock test data and development accounts with fixed credentials
+-- (e.g. password: 'Password123!') intended SOLELY FOR LOCAL DEVELOPMENT AND TESTING.
+--
+-- DO NOT EXECUTE THIS FILE AGAINST A PRODUCTION DATABASE OR STAGING ENVIRONMENT.
+-- Production user accounts must be provisioned through authentic Supabase Auth
+-- registration flows with secure, user-defined passwords and multi-factor verification.
+--
+-- ============================================================================
+
+DO $$
+DECLARE
+    v_allow_seed TEXT := current_setting('quickcut.allow_destructive_dev_seed', true);
+    v_server_ip INET := inet_server_addr();
+    v_is_local BOOLEAN := false;
+BEGIN
+    -- Fail-closed safeguard:
+    -- 1. Explicit developer opt-in takes precedence
+    IF v_allow_seed IN ('on', 'true', 'yes', '1') THEN
+        v_is_local := true;
+    -- 2. Local Supabase container check (UNIX socket or loopback)
+    ELSIF v_server_ip IS NULL OR v_server_ip = '127.0.0.1'::inet OR v_server_ip = '::1'::inet THEN
+        v_is_local := true;
+    END IF;
+
+    IF NOT v_is_local THEN
+        RAISE EXCEPTION 'CRITICAL SECURITY VIOLATION: seed.sql contains destructive TRUNCATE statements and development credentials (Password123!). It cannot be executed on remote or production databases (server IP: %). To override intentionally for a disposable staging database, execute `SET quickcut.allow_destructive_dev_seed = ''on'';` in your session before running.', v_server_ip;
+    END IF;
+END $$;
 
 -- Safe cleanup for fresh seed
 TRUNCATE TABLE public.audit_logs CASCADE;
@@ -13,6 +45,19 @@ TRUNCATE TABLE public.barbers CASCADE;
 TRUNCATE TABLE public.shop_staff CASCADE;
 TRUNCATE TABLE public.shops CASCADE;
 TRUNCATE TABLE public.profiles CASCADE;
+
+-- Fix NULL token columns in auth.users by converting NULLs to empty strings ('')
+-- Supabase GoTrue crashes scanning SQL NULL into Go string variables.
+UPDATE auth.users 
+SET 
+    confirmation_token = COALESCE(confirmation_token, ''),
+    recovery_token = COALESCE(recovery_token, ''),
+    email_change_token_new = COALESCE(email_change_token_new, ''),
+    email_change_token_current = COALESCE(email_change_token_current, ''),
+    email_change = COALESCE(email_change, ''),
+    phone_change = COALESCE(phone_change, ''),
+    phone_change_token = COALESCE(phone_change_token, ''),
+    reauthentication_token = COALESCE(reauthentication_token, '');
 
 -- 1. Create Auth Users (Pre-registered test accounts with password: Password123!)
 -- Admin
@@ -34,7 +79,16 @@ INSERT INTO auth.users (
     now(),
     now(),
     '', '', '', '', '', '', '', ''
-) ON CONFLICT (id) DO UPDATE SET encrypted_password = EXCLUDED.encrypted_password;
+) ON CONFLICT (id) DO UPDATE SET 
+    encrypted_password = EXCLUDED.encrypted_password,
+    confirmation_token = EXCLUDED.confirmation_token,
+    recovery_token = EXCLUDED.recovery_token,
+    email_change_token_new = EXCLUDED.email_change_token_new,
+    email_change = EXCLUDED.email_change,
+    email_change_token_current = EXCLUDED.email_change_token_current,
+    phone_change = EXCLUDED.phone_change,
+    phone_change_token = EXCLUDED.phone_change_token,
+    reauthentication_token = EXCLUDED.reauthentication_token;
 
 -- Owner
 INSERT INTO auth.users (
@@ -55,7 +109,16 @@ INSERT INTO auth.users (
     now(),
     now(),
     '', '', '', '', '', '', '', ''
-) ON CONFLICT (id) DO UPDATE SET encrypted_password = EXCLUDED.encrypted_password;
+) ON CONFLICT (id) DO UPDATE SET 
+    encrypted_password = EXCLUDED.encrypted_password,
+    confirmation_token = EXCLUDED.confirmation_token,
+    recovery_token = EXCLUDED.recovery_token,
+    email_change_token_new = EXCLUDED.email_change_token_new,
+    email_change = EXCLUDED.email_change,
+    email_change_token_current = EXCLUDED.email_change_token_current,
+    phone_change = EXCLUDED.phone_change,
+    phone_change_token = EXCLUDED.phone_change_token,
+    reauthentication_token = EXCLUDED.reauthentication_token;
 
 -- Staff
 INSERT INTO auth.users (
@@ -76,7 +139,16 @@ INSERT INTO auth.users (
     now(),
     now(),
     '', '', '', '', '', '', '', ''
-) ON CONFLICT (id) DO UPDATE SET encrypted_password = EXCLUDED.encrypted_password;
+) ON CONFLICT (id) DO UPDATE SET 
+    encrypted_password = EXCLUDED.encrypted_password,
+    confirmation_token = EXCLUDED.confirmation_token,
+    recovery_token = EXCLUDED.recovery_token,
+    email_change_token_new = EXCLUDED.email_change_token_new,
+    email_change = EXCLUDED.email_change,
+    email_change_token_current = EXCLUDED.email_change_token_current,
+    phone_change = EXCLUDED.phone_change,
+    phone_change_token = EXCLUDED.phone_change_token,
+    reauthentication_token = EXCLUDED.reauthentication_token;
 
 -- Customer 1
 INSERT INTO auth.users (
@@ -97,7 +169,16 @@ INSERT INTO auth.users (
     now(),
     now(),
     '', '', '', '', '', '', '', ''
-) ON CONFLICT (id) DO UPDATE SET encrypted_password = EXCLUDED.encrypted_password;
+) ON CONFLICT (id) DO UPDATE SET 
+    encrypted_password = EXCLUDED.encrypted_password,
+    confirmation_token = EXCLUDED.confirmation_token,
+    recovery_token = EXCLUDED.recovery_token,
+    email_change_token_new = EXCLUDED.email_change_token_new,
+    email_change = EXCLUDED.email_change,
+    email_change_token_current = EXCLUDED.email_change_token_current,
+    phone_change = EXCLUDED.phone_change,
+    phone_change_token = EXCLUDED.phone_change_token,
+    reauthentication_token = EXCLUDED.reauthentication_token;
 
 -- Customer 2
 INSERT INTO auth.users (
@@ -118,7 +199,16 @@ INSERT INTO auth.users (
     now(),
     now(),
     '', '', '', '', '', '', '', ''
-) ON CONFLICT (id) DO UPDATE SET encrypted_password = EXCLUDED.encrypted_password;
+) ON CONFLICT (id) DO UPDATE SET 
+    encrypted_password = EXCLUDED.encrypted_password,
+    confirmation_token = EXCLUDED.confirmation_token,
+    recovery_token = EXCLUDED.recovery_token,
+    email_change_token_new = EXCLUDED.email_change_token_new,
+    email_change = EXCLUDED.email_change,
+    email_change_token_current = EXCLUDED.email_change_token_current,
+    phone_change = EXCLUDED.phone_change,
+    phone_change_token = EXCLUDED.phone_change_token,
+    reauthentication_token = EXCLUDED.reauthentication_token;
 
 -- Ensure auth.identities are mapped for all seeded users
 INSERT INTO auth.identities (
@@ -317,8 +407,7 @@ VALUES (
     timezone('utc'::text, now() - INTERVAL '10 minutes')
 );
 
--- 3. Billable Completed entry (Customer QR Check-in + Staff Completion + Not Walkin)
--- Trigger will automatically compute is_billable = true!
+-- 3. Completed online entry (Customer QR Check-in + Staff Completion)
 INSERT INTO public.queue_entries (
     id, shop_id, customer_id, barber_id, service_id, queue_number, status, 
     qr_code_token, checked_in_at, called_at, completed_at, is_walkin, created_at
@@ -339,7 +428,7 @@ VALUES (
     timezone('utc'::text, now() - INTERVAL '2 hours 15 minutes')
 );
 
--- 4. Completed Walk-In entry (Should NOT be billable: is_walkin = true)
+-- 4. Completed Walk-In entry
 INSERT INTO public.queue_entries (
     id, shop_id, customer_id, barber_id, service_id, guest_name, queue_number, status, 
     qr_code_token, completed_at, is_walkin, created_at
@@ -359,38 +448,6 @@ VALUES (
     timezone('utc'::text, now() - INTERVAL '1 hour')
 );
 
--- Insert Fee Record for Shop (Demonstrates Rs 5 per billable service)
-INSERT INTO public.fee_records (
-    id, shop_id, month, billable_count, rate_per_service, amount, status, disputed_until, dispute_reason
-)
-VALUES (
-    '60000000-0000-0000-0000-000000000001',
-    '10000000-0000-0000-0000-000000000001',
-    to_char(timezone('utc'::text, now()), 'YYYY-MM'),
-    148,
-    5.00,
-    740.00, -- 148 * Rs 5
-    'pending',
-    timezone('utc'::text, now() + INTERVAL '5 days'),
-    NULL
-);
-
--- Insert Sample Payment
-INSERT INTO public.payments (
-    id, fee_record_id, shop_id, amount, currency, status, payment_method, transaction_ref, paid_at
-)
-VALUES (
-    '70000000-0000-0000-0000-000000000001',
-    '60000000-0000-0000-0000-000000000001',
-    '10000000-0000-0000-0000-000000000001',
-    740.00,
-    'INR',
-    'completed',
-    'UPI',
-    'UPI/20261022/984719284',
-    timezone('utc'::text, now() - INTERVAL '1 day')
-);
-
 -- Insert Notifications
 INSERT INTO public.notifications (user_id, title, message, type, read)
 VALUES 
@@ -399,13 +456,6 @@ VALUES
     'Your Turn is Approaching!',
     'Crown & Blade Barbershop: Sam Wilson is ready to welcome you shortly.',
     'queue_update',
-    false
-),
-(
-    '00000000-0000-0000-0000-000000000002',
-    'Monthly Fee Statement Ready',
-    'Your billing statement for this month has been generated: Rs 740.00 (148 billable cuts @ Rs 5/service).',
-    'billing',
     false
 );
 

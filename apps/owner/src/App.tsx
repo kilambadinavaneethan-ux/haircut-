@@ -5,16 +5,11 @@ import {
   Barber,
   ShopStaff,
   QueueEntryWithDetails,
-  FeeRecord,
-  Payment,
-  formatFeeAmount,
-  isFeeDisputable,
   getSupabaseClient
 } from '@quickcut/shared';
 import { OwnerAuthScreen } from './screens/OwnerAuthScreen';
 import { SubmitShopModal } from './components/SubmitShopModal';
 import { ServiceModal } from './components/ServiceModal';
-import { DisputeModal } from './components/DisputeModal';
 import { StaffBarberManager } from './components/StaffBarberManager';
 
 export default function OwnerApp() {
@@ -24,7 +19,7 @@ export default function OwnerApp() {
 
   // Active navigation tab
   const [activeTab, setActiveTab] = useState<
-    'stats' | 'queue' | 'history' | 'services' | 'staff' | 'fees'
+    'stats' | 'queue' | 'history' | 'services' | 'staff'
   >('stats');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
@@ -40,8 +35,6 @@ export default function OwnerApp() {
   >([]);
   const [liveQueue, setLiveQueue] = useState<QueueEntryWithDetails[]>([]);
   const [allQueueEntries, setAllQueueEntries] = useState<QueueEntryWithDetails[]>([]);
-  const [feeRecords, setFeeRecords] = useState<FeeRecord[]>([]);
-  const [payments, setPayments] = useState<Payment[]>([]);
 
   // Filters
   const [historyFilter, setHistoryFilter] = useState<'today' | '7days' | 'month' | 'all'>('today');
@@ -50,8 +43,6 @@ export default function OwnerApp() {
   const [submitShopModalOpen, setSubmitShopModalOpen] = useState(false);
   const [serviceModalOpen, setServiceModalOpen] = useState(false);
   const [serviceToEdit, setServiceToEdit] = useState<Service | null>(null);
-  const [disputeModalOpen, setDisputeModalOpen] = useState(false);
-  const [selectedFeeRecord, setSelectedFeeRecord] = useState<FeeRecord | null>(null);
 
   const supabase = getSupabaseClient();
   const activeShop = shops.find((s) => s.id === activeShopId) || shops[0] || null;
@@ -175,21 +166,6 @@ export default function OwnerApp() {
         .order('created_at', { ascending: false });
       setAllQueueEntries((allData as unknown as QueueEntryWithDetails[]) || []);
 
-      // Monthly Fee Records
-      const { data: feeData } = await supabase
-        .from('fee_records')
-        .select('*')
-        .eq('shop_id', activeShop.id)
-        .order('month', { ascending: false });
-      setFeeRecords((feeData as unknown as FeeRecord[]) || []);
-
-      // Payment Records
-      const { data: paymentData } = await supabase
-        .from('payments')
-        .select('*')
-        .eq('shop_id', activeShop.id)
-        .order('paid_at', { ascending: false });
-      setPayments((paymentData as unknown as Payment[]) || []);
     } catch (err) {
       console.warn('Error loading shop data:', err);
     }
@@ -234,35 +210,13 @@ export default function OwnerApp() {
     }
   };
 
-  // Pay Fee Statement (Settle via Verified Server-Side Payment RPC)
-  const handlePayFeeRecord = async (feeRecord: FeeRecord) => {
-    try {
-      const ref = `UPI/${new Date().getFullYear()}/${Math.floor(10000000 + Math.random() * 90000000)}`;
-
-      // Execute atomic server-side payment processing RPC
-      const { data, error } = await (supabase.rpc as any)('process_fee_payment', {
-        p_fee_record_id: feeRecord.id,
-        p_payment_method: 'UPI',
-        p_transaction_ref: ref
-      });
-
-      if (error) throw error;
-
-      alert(`Payment of ${formatFeeAmount(feeRecord.amount)} settled successfully via UPI!\nRef: ${ref}`);
-      loadShopDetails();
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Error recording payment';
-      alert(`Payment settlement error: ${msg}`);
-    }
-  };
-
   // 4. Compute Statistics: Services per day, Busiest hours, No-show rate
   const statistics = useMemo(() => {
     const totalEntries = allQueueEntries.length;
     const completedEntries = allQueueEntries.filter((e) => e.status === 'completed');
     const noShowEntries = allQueueEntries.filter((e) => e.status === 'no_show');
     const walkinEntries = allQueueEntries.filter((e) => e.is_walkin);
-    const billableEntries = allQueueEntries.filter((e) => e.is_billable);
+    const onlineCompletedCount = completedEntries.filter((e) => !e.is_walkin).length;
 
     // No-show rate
     const noShowRate = totalEntries > 0 ? ((noShowEntries.length / totalEntries) * 100).toFixed(1) : '0.0';
@@ -305,7 +259,7 @@ export default function OwnerApp() {
       noShowCount: noShowEntries.length,
       noShowRate,
       walkinCount: walkinEntries.length,
-      billableCount: billableEntries.length,
+      onlineCompletedCount,
       daysMap,
       maxDaily,
       hoursMap,
@@ -427,8 +381,7 @@ export default function OwnerApp() {
             { id: 'queue', label: `✂️ Live Queue (${liveQueue.length})` },
             { id: 'history', label: '🗓 Completed' },
             { id: 'services', label: '💈 Services' },
-            { id: 'staff', label: '👥 Barbers & Staff' },
-            { id: 'fees', label: '💰 Platform Fees' }
+            { id: 'staff', label: '👥 Barbers & Staff' }
           ].map((tab) => (
             <button
               key={tab.id}
@@ -524,7 +477,7 @@ export default function OwnerApp() {
                   {statistics.completedCount}
                 </p>
                 <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>
-                  {statistics.billableCount} platform billable cuts
+                  {statistics.onlineCompletedCount} online • {statistics.walkinCount} walk-in
                 </p>
               </div>
 
@@ -539,12 +492,12 @@ export default function OwnerApp() {
               </div>
 
               <div className="glass-panel" style={{ padding: 20 }}>
-                <p style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 700 }}>PLATFORM FEES (₹5/CUT)</p>
+                <p style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 700 }}>WALK-IN GUESTS</p>
                 <p style={{ fontSize: 32, fontWeight: 900, color: 'var(--accent-gold)', marginTop: 4 }}>
-                  {formatFeeAmount(statistics.billableCount * 5.0)}
+                  {statistics.walkinCount}
                 </p>
                 <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>
-                  {statistics.walkinCount} walk-ins (exempt)
+                  Direct in-shop client visits
                 </p>
               </div>
             </div>
@@ -620,7 +573,7 @@ export default function OwnerApp() {
                       <th>Service Selected</th>
                       <th>Queue Status</th>
                       <th>QR Check-in</th>
-                      <th>Platform Fee Eligibility</th>
+                      <th>Booking Source</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -652,15 +605,9 @@ export default function OwnerApp() {
                         </td>
                         <td>
                           {entry.is_walkin ? (
-                            <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>Exempt (Walk-in)</span>
-                          ) : entry.checked_in_at ? (
-                            <span style={{ color: 'var(--accent-green)', fontSize: 12, fontWeight: 700 }}>
-                              Eligible (₹5.00)
-                            </span>
+                            <span style={{ color: 'var(--accent-blue)', fontSize: 12, fontWeight: 600 }}>Walk-in Guest</span>
                           ) : (
-                            <span style={{ color: 'var(--accent-gold)', fontSize: 12 }}>
-                              Pending QR Check-in
-                            </span>
+                            <span style={{ color: 'var(--accent-green)', fontSize: 12, fontWeight: 600 }}>Online Booking</span>
                           )}
                         </td>
                       </tr>
@@ -687,7 +634,7 @@ export default function OwnerApp() {
               <div>
                 <h2 style={{ fontSize: 20, fontWeight: 800 }}>Completed Services Log</h2>
                 <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>
-                  View fulfilled haircut records and verify billable qualifications
+                  View fulfilled haircut records and service history
                 </p>
               </div>
 
@@ -722,7 +669,7 @@ export default function OwnerApp() {
                       <th>Customer</th>
                       <th>Service</th>
                       <th>QR Check-in</th>
-                      <th>Platform Fee</th>
+                      <th>Booking Source</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -753,12 +700,10 @@ export default function OwnerApp() {
                           )}
                         </td>
                         <td>
-                          {entry.is_billable ? (
-                            <span className="badge badge-completed">₹5.00 Billable</span>
+                          {entry.is_walkin ? (
+                            <span style={{ color: 'var(--accent-blue)', fontSize: 12 }}>Walk-in</span>
                           ) : (
-                            <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>
-                              ₹0.00 (Walk-in / No QR)
-                            </span>
+                            <span style={{ color: 'var(--accent-green)', fontSize: 12 }}>Online Booking</span>
                           )}
                         </td>
                       </tr>
@@ -872,169 +817,6 @@ export default function OwnerApp() {
             onReload={loadShopDetails}
           />
         )}
-
-        {/* Tab 6: Platform Fees Statement & Payments */}
-        {activeTab === 'fees' && (
-          <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-              <div>
-                <h2 style={{ fontSize: 20, fontWeight: 800 }}>Platform Monthly Fee Statements</h2>
-                <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>
-                  Platform fee invariant: <strong>₹5.00 per billable service</strong> (App booking + QR check-in arrival + completion). Walk-ins and no-shows are exempt.
-                </p>
-              </div>
-            </div>
-
-            {/* Fee Statements Cards */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 16, marginBottom: 32 }}>
-              {feeRecords.map((record) => {
-                const canDispute = isFeeDisputable(record);
-
-                return (
-                  <div key={record.id} className="glass-panel">
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '1px solid var(--border-color)', paddingBottom: 16, marginBottom: 16 }}>
-                      <div>
-                        <h3 style={{ fontSize: 18, fontWeight: 800 }}>Statement Month: {record.month}</h3>
-                        <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>
-                          Invoice ID: {record.id.slice(0, 8)}... • Generated {new Date(record.created_at).toLocaleDateString()}
-                        </p>
-                      </div>
-
-                      <span className={`badge badge-${record.status}`}>
-                        {record.status.toUpperCase()}
-                      </span>
-                    </div>
-
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 20 }}>
-                      <div style={{ background: '#0D1424', padding: 14, borderRadius: 10 }}>
-                        <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>Billable Cuts</p>
-                        <p style={{ fontSize: 22, fontWeight: 900, color: '#FFFFFF', marginTop: 4 }}>
-                          {record.billable_count} services
-                        </p>
-                      </div>
-                      <div style={{ background: '#0D1424', padding: 14, borderRadius: 10 }}>
-                        <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>Fixed Rate</p>
-                        <p style={{ fontSize: 22, fontWeight: 900, color: 'var(--accent-gold)', marginTop: 4 }}>
-                          ₹5.00 / cut
-                        </p>
-                      </div>
-                      <div style={{ background: '#0D1424', padding: 14, borderRadius: 10 }}>
-                        <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>Total Amount</p>
-                        <p style={{ fontSize: 22, fontWeight: 900, color: 'var(--accent-green)', marginTop: 4 }}>
-                          {formatFeeAmount(record.amount)}
-                        </p>
-                      </div>
-                    </div>
-
-                    {record.dispute_reason && (
-                      <div style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid var(--accent-red)', padding: 12, borderRadius: 8, marginBottom: 16 }}>
-                        <p style={{ fontSize: 12, fontWeight: 700, color: 'var(--accent-red)' }}>Dispute Filed:</p>
-                        <p style={{ fontSize: 13, color: '#FFFFFF', marginTop: 2 }}>{record.dispute_reason}</p>
-                      </div>
-                    )}
-
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                        7-Day Dispute Window Closes:{' '}
-                        <strong style={{ color: '#FFFFFF' }}>{new Date(record.disputed_until).toLocaleDateString()}</strong>{' '}
-                        ({canDispute ? 'Active' : 'Closed'})
-                      </p>
-
-                      <div style={{ display: 'flex', gap: 10 }}>
-                        {canDispute && record.status !== 'disputed' && (
-                          <button
-                            onClick={() => {
-                              setSelectedFeeRecord(record);
-                              setDisputeModalOpen(true);
-                            }}
-                            style={{
-                              background: 'transparent',
-                              border: '1px solid var(--accent-red)',
-                              color: 'var(--accent-red)',
-                              padding: '8px 16px',
-                              borderRadius: 8,
-                              fontSize: 13,
-                              fontWeight: 700
-                            }}
-                          >
-                            Dispute Entry (7-Day Window)
-                          </button>
-                        )}
-
-                        {record.status !== 'paid' && (
-                          <button
-                            onClick={() => handlePayFeeRecord(record)}
-                            style={{
-                              background: 'var(--accent-green)',
-                              color: '#0A0F1D',
-                              padding: '8px 20px',
-                              borderRadius: 8,
-                              fontSize: 13,
-                              fontWeight: 800
-                            }}
-                          >
-                            Pay via UPI
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-
-              {feeRecords.length === 0 && (
-                <div className="glass-panel" style={{ textAlign: 'center', padding: 32 }}>
-                  <p style={{ color: 'var(--text-muted)' }}>No monthly fee statements generated yet.</p>
-                </div>
-              )}
-            </div>
-
-            {/* Payment Records Section */}
-            <div>
-              <h3 style={{ fontSize: 18, fontWeight: 800, marginBottom: 12 }}>Payment Settlement History</h3>
-              <div className="glass-panel" style={{ padding: 0 }}>
-                <div className="table-responsive">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Date</th>
-                        <th>Transaction Ref</th>
-                        <th>Payment Method</th>
-                        <th>Amount Paid</th>
-                        <th>Status</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {payments.map((p) => (
-                        <tr key={p.id}>
-                          <td style={{ color: 'var(--text-muted)' }}>
-                            {new Date(p.paid_at).toLocaleDateString()}
-                          </td>
-                          <td style={{ fontFamily: 'monospace', fontWeight: 600 }}>{p.transaction_ref}</td>
-                          <td>{p.payment_method}</td>
-                          <td style={{ fontWeight: 800, color: 'var(--accent-green)' }}>
-                            {formatFeeAmount(p.amount)}
-                          </td>
-                          <td>
-                            <span className="badge badge-paid">{p.status}</span>
-                          </td>
-                        </tr>
-                      ))}
-
-                      {payments.length === 0 && (
-                        <tr>
-                          <td colSpan={5} style={{ textAlign: 'center', padding: 24, color: 'var(--text-muted)' }}>
-                            No payment transactions recorded yet.
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
       </main>
 
       {/* Modals */}
@@ -1059,16 +841,6 @@ export default function OwnerApp() {
           onSaved={loadShopDetails}
         />
       )}
-
-      <DisputeModal
-        visible={disputeModalOpen}
-        feeRecord={selectedFeeRecord}
-        onClose={() => {
-          setDisputeModalOpen(false);
-          setSelectedFeeRecord(null);
-        }}
-        onDisputeSubmitted={loadShopDetails}
-      />
     </div>
   );
 }

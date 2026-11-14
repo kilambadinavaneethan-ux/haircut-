@@ -18,9 +18,14 @@ export async function logAdminAction(
       ip_address: 'admin-console',
       created_at: new Date().toISOString()
     };
-    await (supabase.from('audit_logs') as any).insert(entry);
+    const { error } = await (supabase.from('audit_logs') as any).insert(entry);
+    if (error) {
+      console.error(`[Admin Audit Error] Failed to persist audit log for ${action}:`, error.message || error);
+      throw new Error(`Audit log persistence failed: ${error.message || 'Database error'}`);
+    }
     console.info(`[Admin Audit] ${action} on ${entityType}:${entityId}`, payload);
   } catch (err) {
     console.warn('[Admin Audit Warning] Failed to persist audit log:', err);
+    throw err;
   }
 }
