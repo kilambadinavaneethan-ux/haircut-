@@ -833,6 +833,26 @@ SET
     phone_change_token = COALESCE(phone_change_token, ''),
     reauthentication_token = COALESCE(reauthentication_token, '');
 
+-- ============================================================================
+-- SECTION 3: MOCK DATA & DEVELOPMENT TEST FIXTURES
+-- ============================================================================
+-- ⚠️  CRITICAL PRODUCTION PROTECTION GUARD:
+-- The records below are mock evaluation fixtures with fixed credentials ('Password123!').
+-- On remote or production databases, this section is blocked by default.
+-- To override intentionally for a disposable staging database, execute:
+--   SET quickcut.allow_destructive_dev_seed = 'on';
+-- ============================================================================
+
+DO $$
+DECLARE
+    v_allow_seed TEXT := current_setting('quickcut.allow_destructive_dev_seed', true);
+    v_server_ip INET := inet_server_addr();
+BEGIN
+    IF v_allow_seed NOT IN ('on', 'true', 'yes', '1') AND v_server_ip IS NOT NULL AND v_server_ip != '127.0.0.1'::inet AND v_server_ip != '::1'::inet THEN
+        RAISE EXCEPTION 'CRITICAL SECURITY VIOLATION: Blocked insertion of mock seed accounts and Password123! on remote server (IP: %). To override intentionally for staging, execute `SET quickcut.allow_destructive_dev_seed = ''on'';` before running.', v_server_ip;
+    END IF;
+END $$;
+
 -- 1. Create Auth Users (Pre-registered test accounts with password: Password123!)
 -- Admin
 INSERT INTO auth.users (
@@ -1828,7 +1848,7 @@ BEGIN
     END IF;
 
     IF v_entry.status != 'waiting' THEN
-        RAISE EXCEPTION 'Ticket #% cannot be checked in because its status is "%".', v_entry.queue_number, v_entry.status;
+        RAISE EXCEPTION 'This queue ticket cannot be checked in because it is no longer in waiting status.';
     END IF;
 
     v_token_clean := TRIM(p_qr_token);
@@ -1849,20 +1869,15 @@ BEGIN
         END;
     END IF;
 
-    -- Direct token matches (Fix: replace JavaScript String() with v_entry.queue_number::text)
+    -- Direct cryptographic token match
     IF NOT v_token_matched THEN
-        IF v_entry.qr_code_token::text = v_token_clean
-           OR v_entry.shop_id::text = v_token_clean
-           OR v_entry.queue_number::text = v_token_clean
-        THEN
-            v_token_matched := true;
-        ELSIF (v_is_staff OR v_is_owner OR v_is_admin) AND length(v_token_clean) >= 4 AND v_entry.qr_code_token::text ILIKE ('%' || v_token_clean || '%') THEN
+        IF v_entry.qr_code_token::text = v_token_clean THEN
             v_token_matched := true;
         END IF;
     END IF;
 
     IF NOT v_token_matched THEN
-        RAISE EXCEPTION 'Invalid check-in QR code or token for Ticket #%.', v_entry.queue_number;
+        RAISE EXCEPTION 'Invalid check-in QR code or token. Cryptographic QR proof of arrival required.';
     END IF;
 
     -- Record verified arrival check-in using trusted server database time
@@ -2445,7 +2460,7 @@ BEGIN
     END IF;
 
     IF v_entry.status != 'waiting' THEN
-        RAISE EXCEPTION 'Ticket #% cannot be checked in because its status is "%".', v_entry.queue_number, v_entry.status;
+        RAISE EXCEPTION 'This queue ticket cannot be checked in because it is no longer in waiting status.';
     END IF;
 
     v_token_clean := TRIM(p_qr_token);
@@ -2468,21 +2483,11 @@ BEGIN
     IF NOT v_token_matched THEN
         IF v_entry.qr_code_token::text = v_token_clean THEN
             v_token_matched := true;
-        ELSIF (v_is_staff OR v_is_owner OR v_is_admin) THEN
-            IF v_entry.queue_number::text = v_token_clean
-               OR (length(v_token_clean) >= 4 AND v_entry.qr_code_token::text ILIKE ('%' || v_token_clean || '%'))
-            THEN
-                v_token_matched := true;
-            END IF;
         END IF;
     END IF;
 
     IF NOT v_token_matched THEN
-        IF v_is_customer THEN
-            RAISE EXCEPTION 'Invalid check-in QR code. Please scan the official QR code displayed at the barbershop.';
-        ELSE
-            RAISE EXCEPTION 'Invalid check-in QR code or token for Ticket #%.', v_entry.queue_number;
-        END IF;
+        RAISE EXCEPTION 'Invalid check-in QR code or token. Cryptographic QR proof of arrival required.';
     END IF;
 
     UPDATE public.queue_entries
@@ -2742,7 +2747,7 @@ BEGIN
 
     -- Expiration check: Ticket must be for current local date and within 24 hours
     IF v_entry.queue_date < v_current_local_date OR v_entry.created_at < (now() - INTERVAL '24 hours') THEN
-        RAISE EXCEPTION 'Ticket #% has expired and cannot be checked in.', v_entry.queue_number;
+        RAISE EXCEPTION 'This check-in QR code has expired and cannot be used.';
     END IF;
 
     -- Idempotent check: If already checked in, return success safely
@@ -2758,7 +2763,7 @@ BEGIN
 
     -- Status guard: Entry must be in waiting status
     IF v_entry.status != 'waiting' THEN
-        RAISE EXCEPTION 'Ticket #% cannot be checked in because its status is "%".', v_entry.queue_number, v_entry.status;
+        RAISE EXCEPTION 'This queue ticket cannot be checked in because it is no longer in waiting status.';
     END IF;
 
     v_token_clean := TRIM(p_qr_token);
@@ -2792,7 +2797,7 @@ BEGIN
 
     -- Strictly reject queue number, partial match, or shop ID as proof of authenticity
     IF NOT v_token_matched THEN
-        RAISE EXCEPTION 'Invalid check-in QR code or token for Ticket #%. Cryptographic QR proof of arrival required.', v_entry.queue_number;
+        RAISE EXCEPTION 'Invalid check-in QR code or token. Cryptographic QR proof of arrival required.';
     END IF;
 
     -- Record verified arrival check-in using trusted server database time

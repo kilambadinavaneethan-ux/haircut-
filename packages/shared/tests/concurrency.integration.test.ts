@@ -5,18 +5,19 @@
  * IMPORTANT:
  * This is an actual PostgreSQL database integration test that connects to an
  * active, disposable Supabase / PostgreSQL instance (e.g. `npx supabase start`
- * or a disposable staging database).
+ * or an isolated disposable staging database).
  * 
- * Unlike unit simulation tests (Test Suite 14 in quickcut.test.ts), this suite
+ * Unlike in-memory unit simulations (Test Suite 14 in quickcut.test.ts), this suite
  * verifies PostgreSQL engine-level row locking on `shop_daily_counters` and
  * unique partial index `uq_active_customer_queue`.
  * 
- * Requirements for executing this live database test:
+ * Requirements:
  *   1. A disposable local or staging Supabase database running with migrations applied.
- *   2. Either service-role key or admin access to provision concurrent test accounts.
+ *   2. `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY`.
  * 
- * Usage:
+ * Execution:
  *   $env:SUPABASE_URL="http://127.0.0.1:54321"
+ *   $env:SUPABASE_ANON_KEY="<anon_key>"
  *   $env:SUPABASE_SERVICE_ROLE_KEY="<service_role_key>"
  *   npm run test:integration
  * ============================================================================
@@ -28,7 +29,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-// Parse workspace .env if available
+// Load .env if present
 function loadEnv() {
   const envPath = path.resolve(process.cwd(), '.env');
   if (fs.existsSync(envPath)) {
@@ -55,115 +56,141 @@ const SUPABASE_URL = process.env.SUPABASE_URL || 'http://127.0.0.1:54321';
 const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const ANON_KEY = process.env.SUPABASE_ANON_KEY || '';
 
-function createIndependentClient(authKey?: string): SupabaseClient | null {
-  const key = authKey || SERVICE_ROLE_KEY || ANON_KEY;
-  if (!key) return null;
-  try {
-    return createClient(SUPABASE_URL, key, {
-      auth: {
-        persistSession: false,
-        autoRefreshToken: false
-      }
-    });
-  } catch {
-    return null;
-  }
-}
-
 test('QuickCut Real PostgreSQL Concurrency & Isolation Integration Suite', async (t) => {
-  const adminClient = createIndependentClient(SERVICE_ROLE_KEY);
-  const anonClient = createIndependentClient(ANON_KEY);
-  const activeClient = adminClient || anonClient;
+  // Fail with helpful error if required environment variables are missing
+  if (!SERVICE_ROLE_KEY || !ANON_KEY) {
+    assert.fail(
+      '\n============================================================\n' +
+      '[INTEGRATION TEST CONFIGURATION ERROR]\n' +
+      'Missing required environment variables:\n' +
+      `  - SUPABASE_URL: ${SUPABASE_URL}\n` +
+      `  - SUPABASE_ANON_KEY: ${ANON_KEY ? 'CONFIGURED' : 'MISSING'}\n` +
+      `  - SUPABASE_SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY ? 'CONFIGURED' : 'MISSING'}\n\n` +
+      'The real database integration test requires service-role credentials to provision\n' +
+      'isolated test fixtures and test engine-level concurrency.\n\n' +
+      'To execute this test:\n' +
+      '  1. Start your local disposable Supabase instance: `npx supabase start`\n' +
+      '  2. Export environment variables:\n' +
+      '     $env:SUPABASE_SERVICE_ROLE_KEY="<service_role_key>"\n' +
+      '     $env:SUPABASE_ANON_KEY="<anon_key>"\n' +
+      '  3. Run: npm run test:integration\n' +
+      '============================================================\n'
+    );
+  }
 
-  let isDbOnline = false;
-  let hasServiceRole = !!SERVICE_ROLE_KEY;
+  const adminClient = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false }
+  });
 
-  if (activeClient) {
-    try {
-      const { data, error } = await activeClient.from('shops').select('id').limit(1);
-      if (!error && data) {
-        isDbOnline = true;
-      }
-    } catch {
-      isDbOnline = false;
+  // Verify connectivity
+  try {
+    const { error } = await adminClient.from('shops').select('id').limit(1);
+    if (error) {
+      assert.fail(`Database connectivity error to ${SUPABASE_URL}: ${error.message}`);
     }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    assert.fail(`Database connection failed to ${SUPABASE_URL}: ${message}`);
   }
 
-  // If database is offline or service-role key is not configured for account provisioning
-  if (!isDbOnline || !hasServiceRole) {
-    await t.test('Real Database Environment Validation', () => {
-      console.log('\n============================================================');
-      console.log(' [INTEGRATION TEST ENVIRONMENT: POSTGRESQL STAGING / OFFLINE]');
-      console.log(' Connected URL:', SUPABASE_URL);
-      console.log(' Database Reachable:', isDbOnline ? 'YES' : 'NO');
-      console.log(' Service-Role Key Configured:', hasServiceRole ? 'YES' : 'NO (Required for multi-client account provisioning)');
-      console.log(' Note: Test Suite 14 already validated concurrent invariants via in-memory simulation.');
-      console.log(' To execute this REAL database multi-client integration test:');
-      console.log('   1. Start local disposable Supabase: `npx supabase start`');
-      console.log('   2. Set $env:SUPABASE_URL and $env:SUPABASE_SERVICE_ROLE_KEY');
-      console.log('   3. Run: npm run test:integration');
-      console.log('============================================================\n');
-      assert.ok(true, 'Test execution safely bypassed: live database service-role environment not provided');
-    });
-    return;
-  }
-
-  // 1. Ten simultaneous join attempts from the SAME customer
-  await t.test('1. Ten simultaneous join attempts from SAME customer (Real DB Row Locking)', async () => {
-    assert.ok(adminClient, 'Admin client required');
-    const shopId = '10000000-0000-0000-0000-000000000001';
-
-    // Fetch an active service for this shop
-    const { data: services } = await adminClient
-      .from('services')
-      .select('id')
-      .eq('shop_id', shopId)
-      .eq('is_active', true)
-      .limit(1);
-    
-    assert.ok(services && services.length > 0, 'Shop must have at least one active service');
-    const serviceId = services[0].id;
-
-    // Create a temporary test customer without an active ticket
-    const tempEmail = `temp.concurrency.${Date.now()}@quickcut.test`;
-    const { data: userRecord, error: userError } = await adminClient.auth.admin.createUser({
-      email: tempEmail,
-      password: 'TestPassword123!',
+  // Helper to provision an isolated test customer
+  async function provisionTestCustomer(label: string) {
+    const email = `test.${label}.${Date.now()}.${Math.floor(Math.random() * 10000)}@quickcut.test`;
+    const password = 'TestCustomer123!';
+    const { data, error } = await adminClient.auth.admin.createUser({
+      email,
+      password,
       email_confirm: true,
-      user_metadata: { full_name: 'Concurrent Test Customer', role: 'customer' }
+      user_metadata: { full_name: `Test ${label}`, role: 'customer' }
     });
-    assert.strictEqual(userError, null, 'Temp test customer creation failed');
-    const tempCustomerId = userRecord.user.id;
+    if (error || !data.user) {
+      throw new Error(`Failed to provision test customer: ${error?.message}`);
+    }
 
     // Insert profile
     await adminClient.from('profiles').upsert({
-      id: tempCustomerId,
-      email: tempEmail,
-      full_name: 'Concurrent Test Customer',
+      id: data.user.id,
+      email,
+      full_name: `Test ${label}`,
       role: 'customer'
     });
 
-    // Create 10 independent authenticated clients for this same customer
+    const client = createClient(SUPABASE_URL, ANON_KEY, { auth: { persistSession: false } });
+    await client.auth.signInWithPassword({ email, password });
+
+    return { id: data.user.id, email, client };
+  }
+
+  // Helper to provision an isolated test shop & service
+  async function provisionTestShop(shopName: string) {
+    const owner = await provisionTestCustomer(`owner.${shopName}`);
+    await adminClient.from('profiles').update({ role: 'owner' }).eq('id', owner.id);
+
+    const { data: shop, error: shopErr } = await adminClient
+      .from('shops')
+      .insert({
+        name: `Test ${shopName}`,
+        address: '123 Test Street',
+        phone: '9999999999',
+        owner_id: owner.id,
+        status: 'approved',
+        is_active: true
+      })
+      .select('id')
+      .single();
+
+    if (shopErr || !shop) {
+      throw new Error(`Failed to create test shop: ${shopErr?.message}`);
+    }
+
+    const { data: service, error: svcErr } = await adminClient
+      .from('services')
+      .insert({
+        shop_id: shop.id,
+        name: 'Standard Haircut',
+        price: 250,
+        avg_minutes: 25,
+        is_active: true
+      })
+      .select('id')
+      .single();
+
+    if (svcErr || !service) {
+      throw new Error(`Failed to create test service: ${svcErr?.message}`);
+    }
+
+    return { shopId: shop.id, serviceId: service.id, ownerId: owner.id };
+  }
+
+  // =========================================================================
+  // TEST A: SAME CUSTOMER CONCURRENCY (Engine-Level Row Locking & Partial Index)
+  // =========================================================================
+  await t.test('Test A: Ten simultaneous join attempts from SAME customer (uq_active_customer_queue)', async () => {
+    const fixture = await provisionTestShop('Concurrency-Shop-A');
+    const customer = await provisionTestCustomer('SameCustomer-A');
+
+    // Spawn 10 independent clients authenticated as the same customer
     const clients = await Promise.all(
       Array.from({ length: 10 }, async () => {
         const c = createClient(SUPABASE_URL, ANON_KEY, { auth: { persistSession: false } });
-        await c.auth.signInWithPassword({ email: tempEmail, password: 'TestPassword123!' });
+        await c.auth.signInWithPassword({ email: customer.email, password: 'TestCustomer123!' });
         return c;
       })
     );
 
     // Fire 10 simultaneous join requests
     const results = await Promise.allSettled(
-      clients.map(client =>
-        client.rpc('join_queue', {
-          p_shop_id: shopId,
-          p_service_id: serviceId
+      clients.map(c =>
+        c.rpc('join_queue', {
+          p_shop_id: fixture.shopId,
+          p_service_id: fixture.serviceId
         })
       )
     );
 
     let successes = 0;
     let rejectedDuplicates = 0;
+    const errors: string[] = [];
 
     for (const res of results) {
       if (res.status === 'fulfilled') {
@@ -172,80 +199,49 @@ test('QuickCut Real PostgreSQL Concurrency & Isolation Integration Suite', async
           successes++;
         } else if (error) {
           rejectedDuplicates++;
+          errors.push(error.message);
           const isExpected =
             error.code === '23505' ||
             error.message.includes('already') ||
             error.message.includes('active queue ticket');
-          assert.ok(isExpected, `Expected duplicate rejection, got: ${error.message} (${error.code})`);
+          assert.ok(isExpected, `Unexpected error on duplicate join: ${error.message} (${error.code})`);
         }
       } else {
         rejectedDuplicates++;
       }
     }
 
-    // Cleanup created temp user
-    await adminClient.auth.admin.deleteUser(tempCustomerId);
+    // Cleanup
+    await adminClient.from('queue_entries').delete().eq('shop_id', fixture.shopId);
+    await adminClient.from('services').delete().eq('shop_id', fixture.shopId);
+    await adminClient.from('shops').delete().eq('id', fixture.shopId);
+    await adminClient.auth.admin.deleteUser(customer.id);
+    await adminClient.auth.admin.deleteUser(fixture.ownerId);
 
     assert.strictEqual(successes, 1, 'Exactly ONE join attempt must succeed');
-    assert.strictEqual(rejectedDuplicates, 9, 'Exactly 9 duplicate attempts must be rejected by PostgreSQL');
+    assert.strictEqual(rejectedDuplicates, 9, 'Exactly 9 duplicate attempts must be rejected by PostgreSQL engine');
   });
 
-  // 2. Ten distinct customers joining the same shop simultaneously
-  await t.test('2. Ten distinct customers joining simultaneously (Atomic Sequence & No Gap)', async () => {
-    assert.ok(adminClient, 'Admin client required');
-    const shopId = '10000000-0000-0000-0000-000000000001';
+  // =========================================================================
+  // TEST B: DIFFERENT CUSTOMER CONCURRENCY (Atomic Daily Counter Increment)
+  // =========================================================================
+  await t.test('Test B: Ten distinct customers joining simultaneously (Atomic Sequence & No Gap)', async () => {
+    const fixture = await provisionTestShop('Concurrency-Shop-B');
 
-    const { data: services } = await adminClient
-      .from('services')
-      .select('id')
-      .eq('shop_id', shopId)
-      .eq('is_active', true)
-      .limit(1);
-    
-    const serviceId = services![0].id;
-
-    // Provision 10 distinct temporary customers
-    const tempUsers: { id: string; email: string }[] = [];
-    for (let i = 0; i < 10; i++) {
-      const email = `distinct.${Date.now()}.${i}@quickcut.test`;
-      const { data } = await adminClient.auth.admin.createUser({
-        email,
-        password: 'TestPassword123!',
-        email_confirm: true,
-        user_metadata: { full_name: `Distinct Cust ${i}`, role: 'customer' }
-      });
-      tempUsers.push({ id: data!.user.id, email });
-      await adminClient.from('profiles').upsert({
-        id: data!.user.id,
-        email,
-        full_name: `Distinct Cust ${i}`,
-        role: 'customer'
-      });
-    }
-
-    // Create 10 independent authenticated clients
-    const clients = await Promise.all(
-      tempUsers.map(async u => {
-        const c = createClient(SUPABASE_URL, ANON_KEY, { auth: { persistSession: false } });
-        await c.auth.signInWithPassword({ email: u.email, password: 'TestPassword123!' });
-        return c;
-      })
+    // Provision 10 distinct customers
+    const customers = await Promise.all(
+      Array.from({ length: 10 }, (_, i) => provisionTestCustomer(`Distinct-${i}`))
     );
 
-    // Fire 10 simultaneous join requests from 10 distinct customers
-    const joinPromises = clients.map(client =>
-      client.rpc('join_queue', {
-        p_shop_id: shopId,
-        p_service_id: serviceId
+    // Fire 10 simultaneous joins
+    const joinPromises = customers.map(c =>
+      c.client.rpc('join_queue', {
+        p_shop_id: fixture.shopId,
+        p_service_id: fixture.serviceId
       })
     );
 
     const responses = await Promise.all(joinPromises);
-
-    // Cleanup temp users
-    for (const u of tempUsers) {
-      await adminClient.auth.admin.deleteUser(u.id);
-    }
 
     const queueNumbers: number[] = [];
     for (const res of responses) {
@@ -254,16 +250,104 @@ test('QuickCut Real PostgreSQL Concurrency & Isolation Integration Suite', async
       queueNumbers.push(res.data.queue_number);
     }
 
+    // Cleanup
+    await adminClient.from('queue_entries').delete().eq('shop_id', fixture.shopId);
+    await adminClient.from('services').delete().eq('shop_id', fixture.shopId);
+    await adminClient.from('shops').delete().eq('id', fixture.shopId);
+    for (const c of customers) {
+      await adminClient.auth.admin.deleteUser(c.id);
+    }
+    await adminClient.auth.admin.deleteUser(fixture.ownerId);
+
     assert.strictEqual(queueNumbers.length, 10, 'All 10 distinct customers must receive a queue ticket');
 
-    // Verify all queue numbers are strictly unique
+    // Verify all queue numbers are unique
     const uniqueNumbers = new Set(queueNumbers);
     assert.strictEqual(uniqueNumbers.size, 10, 'All 10 assigned queue numbers must be strictly unique (no duplicates)');
 
-    // Verify sequence is strictly contiguous
+    // Verify sequence is strictly contiguous starting from 1
     const sorted = [...queueNumbers].sort((a, b) => a - b);
-    for (let i = 1; i < sorted.length; i++) {
-      assert.strictEqual(sorted[i], sorted[i - 1] + 1, 'Queue numbers must be strictly contiguous without gaps');
+    assert.deepStrictEqual(sorted, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 'Queue numbers must be strictly contiguous from 1 to 10');
+  });
+
+  // =========================================================================
+  // TEST C: REPEATED REQUESTS (Rapid Repeated Join Protection)
+  // =========================================================================
+  await t.test('Test C: Rapid repeated requests from same user prevent duplicate tickets', async () => {
+    const fixture = await provisionTestShop('Concurrency-Shop-C');
+    const customer = await provisionTestCustomer('RepeatedCustomer');
+
+    // 1st request: succeeds
+    const res1 = await customer.client.rpc('join_queue', {
+      p_shop_id: fixture.shopId,
+      p_service_id: fixture.serviceId
+    });
+    assert.strictEqual(res1.error, null);
+    assert.ok(res1.data?.queue_number);
+
+    // 2nd request: immediately fails
+    const res2 = await customer.client.rpc('join_queue', {
+      p_shop_id: fixture.shopId,
+      p_service_id: fixture.serviceId
+    });
+    assert.ok(res2.error, 'Second sequential join must fail');
+    assert.ok(
+      res2.error.message.includes('already') || res2.error.message.includes('active queue ticket'),
+      'Must report active ticket violation'
+    );
+
+    // Cleanup
+    await adminClient.from('queue_entries').delete().eq('shop_id', fixture.shopId);
+    await adminClient.from('services').delete().eq('shop_id', fixture.shopId);
+    await adminClient.from('shops').delete().eq('id', fixture.shopId);
+    await adminClient.auth.admin.deleteUser(customer.id);
+    await adminClient.auth.admin.deleteUser(fixture.ownerId);
+  });
+
+  // =========================================================================
+  // TEST D: CROSS-SHOP CONCURRENCY (Customer Cannot Hold Active Tickets in 2 Shops)
+  // =========================================================================
+  await t.test('Test D: Concurrent attempts to join multiple shops reject multiple active tickets', async () => {
+    const shop1 = await provisionTestShop('Shop-1');
+    const shop2 = await provisionTestShop('Shop-2');
+    const customer = await provisionTestCustomer('CrossShopCustomer');
+
+    const clientA = createClient(SUPABASE_URL, ANON_KEY, { auth: { persistSession: false } });
+    await clientA.auth.signInWithPassword({ email: customer.email, password: 'TestCustomer123!' });
+
+    const clientB = createClient(SUPABASE_URL, ANON_KEY, { auth: { persistSession: false } });
+    await clientB.auth.signInWithPassword({ email: customer.email, password: 'TestCustomer123!' });
+
+    // Race join attempts to shop1 and shop2 simultaneously
+    const results = await Promise.allSettled([
+      clientA.rpc('join_queue', { p_shop_id: shop1.shopId, p_service_id: shop1.serviceId }),
+      clientB.rpc('join_queue', { p_shop_id: shop2.shopId, p_service_id: shop2.serviceId })
+    ]);
+
+    let successCount = 0;
+    let failureCount = 0;
+
+    for (const res of results) {
+      if (res.status === 'fulfilled') {
+        if (!res.value.error && res.value.data?.queue_number) {
+          successCount++;
+        } else {
+          failureCount++;
+        }
+      } else {
+        failureCount++;
+      }
     }
+
+    // Cleanup
+    await adminClient.from('queue_entries').delete().in('shop_id', [shop1.shopId, shop2.shopId]);
+    await adminClient.from('services').delete().in('shop_id', [shop1.shopId, shop2.shopId]);
+    await adminClient.from('shops').delete().in('id', [shop1.shopId, shop2.shopId]);
+    await adminClient.auth.admin.deleteUser(customer.id);
+    await adminClient.auth.admin.deleteUser(shop1.ownerId);
+    await adminClient.auth.admin.deleteUser(shop2.ownerId);
+
+    assert.strictEqual(successCount, 1, 'Customer can hold at most ONE active ticket across ALL shops');
+    assert.strictEqual(failureCount, 1, 'Second cross-shop join must be rejected');
   });
 });

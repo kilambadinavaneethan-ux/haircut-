@@ -14,10 +14,22 @@
 -- ============================================================================
 
 DO $$
+DECLARE
+    v_allow_seed TEXT := current_setting('quickcut.allow_destructive_dev_seed', true);
+    v_server_ip INET := inet_server_addr();
+    v_is_local BOOLEAN := false;
 BEGIN
-    -- Safeguard: Abort immediately if explicitly executed on a production-designated environment
-    IF current_setting('app.environment', true) = 'production' THEN
-        RAISE EXCEPTION 'CRITICAL SECURITY VIOLATION: seed.sql cannot be executed in production environment!';
+    -- Fail-closed safeguard:
+    -- 1. Explicit developer opt-in takes precedence
+    IF v_allow_seed IN ('on', 'true', 'yes', '1') THEN
+        v_is_local := true;
+    -- 2. Local Supabase container check (UNIX socket or loopback)
+    ELSIF v_server_ip IS NULL OR v_server_ip = '127.0.0.1'::inet OR v_server_ip = '::1'::inet THEN
+        v_is_local := true;
+    END IF;
+
+    IF NOT v_is_local THEN
+        RAISE EXCEPTION 'CRITICAL SECURITY VIOLATION: seed.sql contains destructive TRUNCATE statements and development credentials (Password123!). It cannot be executed on remote or production databases (server IP: %). To override intentionally for a disposable staging database, execute `SET quickcut.allow_destructive_dev_seed = ''on'';` in your session before running.', v_server_ip;
     END IF;
 END $$;
 
