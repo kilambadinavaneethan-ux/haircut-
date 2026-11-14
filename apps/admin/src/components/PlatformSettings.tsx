@@ -18,7 +18,6 @@ export default function PlatformSettings({ adminId }: PlatformSettingsProps) {
 
     try {
       const payload = {
-        rate_per_billable_cut: 0.0,
         anomaly_threshold_seconds: anomalyThresholdSeconds,
         maintenance_mode: maintenanceMode,
         updated_at: new Date().toISOString()

@@ -120,11 +120,11 @@ export function StaffQRScannerModal({
 
         {/* Manual Code Input */}
         <View style={styles.manualEntryBox}>
-          <Text style={styles.manualLabel}>Or enter Ticket # or QR token manually:</Text>
+          <Text style={styles.manualLabel}>Or enter QR pass token manually:</Text>
           <View style={styles.manualRow}>
             <TextInput
               style={styles.input}
-              placeholder="e.g. 102 or token"
+              placeholder="e.g. Security token UUID"
               placeholderTextColor="#64748B"
               value={manualCode}
               onChangeText={setManualCode}

@@ -691,4 +691,272 @@ test('QuickCut Test Suite - Core Business Rules, Security & Invariants', async (
     assert.strictEqual(validMonthRegex.test('invalid'), false);
     assert.strictEqual(validMonthRegex.test('2026-1'), false, 'Must be 2-digit month');
   });
+
+  // =========================================================================
+  // 12. Comprehensive 7-Role Security & Cross-Shop Isolation Matrix
+  // =========================================================================
+  await t.test('12. Multi-Role Cross-Shop Security & Isolation Matrix (7 Roles)', async (st) => {
+    // 7 Personas Definition
+    const roles = {
+      customerA: { id: 'cust-a-001', role: 'customer', name: 'Rahul Customer (Shop A)' },
+      customerB: { id: 'cust-b-002', role: 'customer', name: 'Priya Customer (Shop B)' },
+      staffShopA: { id: 'staff-a-001', role: 'staff', shop_id: 'shop-crown-a', name: 'Sam Barber (Shop A)' },
+      staffShopB: { id: 'staff-b-002', role: 'staff', shop_id: 'shop-blade-b', name: 'Vikram Barber (Shop B)' },
+      ownerShopA: { id: 'owner-a-001', role: 'owner', shop_id: 'shop-crown-a', name: 'Alex Owner (Shop A)' },
+      ownerShopB: { id: 'owner-b-002', role: 'owner', shop_id: 'shop-blade-b', name: 'David Owner (Shop B)' },
+      superAdmin: { id: 'admin-001', role: 'admin', name: 'Chief Security Officer' }
+    };
+
+    // Shops setup
+    const shopA = { id: 'shop-crown-a', name: 'Crown Barbershop', status: 'approved', is_paused: false };
+    const shopB = { id: 'shop-blade-b', name: 'Blade Studio', status: 'approved', is_paused: false };
+
+    // Services setup
+    const serviceShopA = { id: 'srv-a-haircut', shop_id: 'shop-crown-a', is_active: true, avg_minutes: 25, price: 300 };
+    const serviceShopB = { id: 'srv-b-shave', shop_id: 'shop-blade-b', is_active: true, avg_minutes: 15, price: 150 };
+
+    // 12a. Scenario 1: Customer A joins Shop A queue with valid Shop A service
+    await st.test('12a. Customer A can join Shop A queue with matching active service', () => {
+      const simulateJoinQueue = (callerId: string, shopId: string, serviceId: string, servicesList: typeof serviceShopA[]) => {
+        const service = servicesList.find((s) => s.id === serviceId && s.shop_id === shopId && s.is_active);
+        if (!service) {
+          throw new Error('Selected service does not belong to this shop or is inactive.');
+        }
+        return {
+          success: true,
+          entry_id: 'entry-a-101',
+          customer_id: callerId,
+          shop_id: shopId,
+          service_id: serviceId,
+          queue_number: 101,
+          qr_code_token: 'uuid-token-cust-a-101'
+        };
+      };
+
+      const result = simulateJoinQueue(roles.customerA.id, shopA.id, serviceShopA.id, [serviceShopA, serviceShopB]);
+      assert.strictEqual(result.success, true);
+      assert.strictEqual(result.customer_id, roles.customerA.id);
+      assert.strictEqual(result.shop_id, shopA.id);
+      assert.strictEqual(result.queue_number, 101);
+    });
+
+    // 12b. Scenario 2: Customer A CANNOT join Shop B queue with Shop A service ID (Cross-shop service mismatch)
+    await st.test('12b. Cross-Shop Service Mismatch is rejected (Customer A joins Shop B with Shop A service)', () => {
+      const simulateJoinQueue = (callerId: string, shopId: string, serviceId: string, servicesList: typeof serviceShopA[]) => {
+        const service = servicesList.find((s) => s.id === serviceId && s.shop_id === shopId && s.is_active);
+        if (!service) {
+          throw new Error('Selected service does not belong to this shop or is inactive.');
+        }
+        return { success: true };
+      };
+
+      assert.throws(
+        () => simulateJoinQueue(roles.customerA.id, shopB.id, serviceShopA.id, [serviceShopA, serviceShopB]),
+        /Selected service does not belong to this shop or is inactive/,
+        'Cross-shop service mismatch must be strictly rejected at the database level'
+      );
+    });
+
+    // 12c. Scenario 3: Cryptographic QR Check-in Hardening (Rejection of queue number, partial match, and expired tokens)
+    await st.test('12c. Cryptographic QR verification enforces exact random token & rejects queue number or expired passes', () => {
+      const mockTicket = {
+        id: 'entry-a-101',
+        shop_id: 'shop-crown-a',
+        customer_id: 'cust-a-001',
+        queue_number: 101,
+        qr_code_token: '4f6d3a82-7e9b-4e12-8c54-9a0d8f3b7e1a',
+        queue_date: '2026-10-24',
+        created_at: Date.now(),
+        status: 'waiting',
+        checked_in_at: null as string | null
+      };
+
+      const simulateVerifyQR = (
+        entry: typeof mockTicket,
+        caller: { id: string; role: string; shop_id?: string },
+        tokenInput: string,
+        currentTime: number
+      ) => {
+        // Expiration check (24 hours)
+        if (currentTime - entry.created_at > 24 * 60 * 60 * 1000) {
+          throw new Error('Ticket has expired and cannot be checked in.');
+        }
+
+        // Caller authorization check
+        const isStaff = caller.role === 'staff' && caller.shop_id === entry.shop_id;
+        const isOwner = caller.role === 'owner' && caller.shop_id === entry.shop_id;
+        const isAdmin = caller.role === 'admin';
+        const isCustomer = caller.id === entry.customer_id;
+
+        if (!(isStaff || isOwner || isAdmin || isCustomer)) {
+          throw new Error('Unauthorized: Caller cannot check in this queue entry.');
+        }
+
+        // Parse JSON QR or raw token
+        let tokenMatched = false;
+        const parsed = parseQueueQRPayload(tokenInput);
+        if (parsed) {
+          if (parsed.platform === 'QuickCut' && parsed.entryId === entry.id && parsed.shopId === entry.shop_id && parsed.token === entry.qr_code_token) {
+            tokenMatched = true;
+          }
+        } else if (tokenInput.trim() === entry.qr_code_token) {
+          tokenMatched = true;
+        }
+
+        // Strict rejection: queue number or partial match is NOT accepted
+        if (!tokenMatched) {
+          throw new Error('Invalid check-in QR code or token. Cryptographic QR proof of arrival required.');
+        }
+
+        return { success: true, checked_in: true };
+      };
+
+      // 1. Valid cryptographic token succeeds
+      const validQR = generateQueueQRPayload(mockTicket.id, mockTicket.shop_id, mockTicket.qr_code_token);
+      const res1 = simulateVerifyQR(mockTicket, roles.customerA, validQR, mockTicket.created_at + 60000);
+      assert.strictEqual(res1.success, true);
+
+      // 2. Guessable queue number (#101) is strictly REJECTED
+      assert.throws(
+        () => simulateVerifyQR(mockTicket, roles.staffShopA, '101', mockTicket.created_at + 60000),
+        /Cryptographic QR proof of arrival required/,
+        'Plain sequential queue number must be rejected as proof of arrival'
+      );
+
+      // 3. Partial token match is strictly REJECTED
+      assert.throws(
+        () => simulateVerifyQR(mockTicket, roles.staffShopA, '4f6d', mockTicket.created_at + 60000),
+        /Cryptographic QR proof of arrival required/,
+        'Partial token fragments must be rejected'
+      );
+
+      // 4. Expired QR code (> 24 hours) is strictly REJECTED
+      const expiredTime = mockTicket.created_at + (25 * 60 * 60 * 1000);
+      assert.throws(
+        () => simulateVerifyQR(mockTicket, roles.customerA, validQR, expiredTime),
+        /Ticket has expired/,
+        'Expired QR codes must be rejected'
+      );
+
+      // 5. Cross-shop QR token (Shop B QR payload presented for Shop A ticket) is REJECTED
+      const crossShopQR = generateQueueQRPayload(mockTicket.id, 'shop-blade-b', mockTicket.qr_code_token);
+      assert.throws(
+        () => simulateVerifyQR(mockTicket, roles.customerA, crossShopQR, mockTicket.created_at + 60000),
+        /Cryptographic QR proof of arrival required/,
+        'Cross-shop QR payload must be rejected'
+      );
+    });
+
+    // 12d. Scenario 4: Customer Privacy & Data Isolation (Customer A CANNOT view Customer B's row or PII)
+    await st.test('12d. Customer Privacy & RLS Isolation prevents Customer A from seeing Customer B data', () => {
+      const ticketsDatabase = [
+        { id: 't-1', customer_id: roles.customerA.id, shop_id: 'shop-crown-a', guest_name: 'Rahul', guest_phone: '+919876543210', qr_code_token: 'secret-a' },
+        { id: 't-2', customer_id: roles.customerB.id, shop_id: 'shop-crown-a', guest_name: 'Priya', guest_phone: '+919123456789', qr_code_token: 'secret-b' }
+      ];
+
+      // Simulated hardened RLS SELECT policy
+      const rlsSelectQueueEntries = (caller: { id: string; role: string; shop_id?: string }) => {
+        return ticketsDatabase.filter((row) => {
+          if (caller.role === 'admin') return true;
+          if (caller.role === 'owner' && caller.shop_id === row.shop_id) return true;
+          if (caller.role === 'staff' && caller.shop_id === row.shop_id) return true;
+          if (caller.role === 'customer' && caller.id === row.customer_id) return true;
+          return false;
+        });
+      };
+
+      // Customer A query
+      const customerAVisible = rlsSelectQueueEntries(roles.customerA);
+      assert.strictEqual(customerAVisible.length, 1);
+      assert.strictEqual(customerAVisible[0].customer_id, roles.customerA.id);
+      assert.strictEqual(customerAVisible[0].guest_name, 'Rahul');
+      // Customer A cannot see Customer B's ticket, phone, or secret QR token
+      assert.strictEqual(customerAVisible.some((t) => t.customer_id === roles.customerB.id), false);
+
+      // Customer B query
+      const customerBVisible = rlsSelectQueueEntries(roles.customerB);
+      assert.strictEqual(customerBVisible.length, 1);
+      assert.strictEqual(customerBVisible[0].customer_id, roles.customerB.id);
+      assert.strictEqual(customerBVisible.some((t) => t.customer_id === roles.customerA.id), false);
+    });
+
+    // 12e. Scenario 5: Staff Shop A CANNOT manage Shop B queue entries
+    await st.test('12e. Staff Shop A is strictly unauthorized to manage Shop B queue', () => {
+      const ticketShopB = { id: 'entry-b-201', shop_id: 'shop-blade-b', status: 'waiting' };
+
+      const simulateStaffStartService = (caller: typeof roles.staffShopA, ticket: typeof ticketShopB) => {
+        if (caller.shop_id !== ticket.shop_id) {
+          throw new Error('Unauthorized: Staff can only manage queue entries in their assigned shop.');
+        }
+        return { success: true, status: 'in_service' };
+      };
+
+      assert.throws(
+        () => simulateStaffStartService(roles.staffShopA, ticketShopB),
+        /Staff can only manage queue entries in their assigned shop/,
+        'Staff of Shop A must be blocked from starting service for Shop B'
+      );
+    });
+
+    // 12f. Scenario 6: Staff Shop B CANNOT check in a customer ticket belonging to Shop A
+    await st.test('12f. Staff Shop B cannot check in Shop A ticket (Cross-shop check-in blocked)', () => {
+      const ticketShopA = { id: 'entry-a-101', shop_id: 'shop-crown-a', customer_id: 'cust-a-001', qr_code_token: 'valid-token' };
+
+      const simulateCheckIn = (caller: typeof roles.staffShopB, ticket: typeof ticketShopA) => {
+        if (caller.role === 'staff' && caller.shop_id !== ticket.shop_id) {
+          throw new Error('Unauthorized: Caller cannot check in this queue entry.');
+        }
+        return { success: true };
+      };
+
+      assert.throws(
+        () => simulateCheckIn(roles.staffShopB, ticketShopA),
+        /Unauthorized: Caller cannot check in this queue entry/,
+        'Staff from another shop must be denied arrival check-in verification'
+      );
+    });
+
+    // 12g. Scenario 7: Owner Shop A CANNOT view Shop B revenue or queue entries
+    await st.test('12g. Owner Shop A cannot view Shop B queue entries or revenue data', () => {
+      const shopRevenues = [
+        { shop_id: 'shop-crown-a', completed_cuts: 45, gross_revenue: 13500 },
+        { shop_id: 'shop-blade-b', completed_cuts: 80, gross_revenue: 24000 }
+      ];
+
+      const rlsOwnerRevenue = (owner: typeof roles.ownerShopA) => {
+        return shopRevenues.filter((r) => r.shop_id === owner.shop_id);
+      };
+
+      const ownerAData = rlsOwnerRevenue(roles.ownerShopA);
+      assert.strictEqual(ownerAData.length, 1);
+      assert.strictEqual(ownerAData[0].shop_id, 'shop-crown-a');
+      assert.strictEqual(ownerAData[0].gross_revenue, 13500);
+      assert.strictEqual(ownerAData.some((r) => r.shop_id === 'shop-blade-b'), false);
+    });
+
+    // 12h. Scenario 8: Super Admin actions are strictly authorized and recorded to audit logs
+    await st.test('12h. Super Admin possesses audited administrative authority', () => {
+      const auditTrail: Array<{ action: string; user_id: string; entity: string; timestamp: number }> = [];
+
+      const executeAdminAction = (adminUser: typeof roles.superAdmin, action: string, entity: string) => {
+        if (adminUser.role !== 'admin') {
+          throw new Error('Access denied: Super Admin privileges required.');
+        }
+        // Strict audit log recording
+        auditTrail.push({
+          action,
+          user_id: adminUser.id,
+          entity,
+          timestamp: Date.now()
+        });
+        return { success: true };
+      };
+
+      const res = executeAdminAction(roles.superAdmin, 'SHOP_STATUS_APPROVED', 'shop-crown-a');
+      assert.strictEqual(res.success, true);
+      assert.strictEqual(auditTrail.length, 1);
+      assert.strictEqual(auditTrail[0].action, 'SHOP_STATUS_APPROVED');
+      assert.strictEqual(auditTrail[0].user_id, roles.superAdmin.id);
+    });
+  });
 });

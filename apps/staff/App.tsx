@@ -15,6 +15,7 @@ import {
   Shop,
   Service,
   QueueEntryWithDetails,
+  parseQueueQRPayload,
   getSupabaseClient
 } from '@quickcut/shared';
 import { StaffAuthScreen } from './src/screens/StaffAuthScreen';
@@ -391,17 +392,17 @@ export default function StaffApp() {
     await loadTodayQueue();
   };
 
-  // Action: Verify QR Check-in Code (Atomic verification RPC)
+  // Action: Verify QR Check-in Code (Atomic cryptographic verification RPC)
   const handleVerifyQRScan = async (codeOrToken: string) => {
     const trimmed = codeOrToken.trim();
-    const target = targetEntryForQR || queue.find(
-      (e) =>
-        e.qr_code_token.toLowerCase() === trimmed.toLowerCase() ||
-        String(e.queue_number) === trimmed
+    const parsedQR = parseQueueQRPayload(trimmed);
+    const target = targetEntryForQR || (parsedQR
+      ? queue.find((e) => e.id === parsedQR.entryId)
+      : queue.find((e) => e.qr_code_token.toLowerCase() === trimmed.toLowerCase())
     );
 
     if (!target) {
-      throw new Error(`No waiting ticket matched code "${codeOrToken}".`);
+      throw new Error(`No waiting ticket matched the provided cryptographic QR token.`);
     }
 
     try {

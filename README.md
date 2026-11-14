@@ -45,17 +45,20 @@ QuickCut is a multi-platform barber shop queue management monorepo designed to e
 
 ---
 
-## 🔑 Pre-Configured Login Credentials
+## 🔑 Development Test Accounts
 
-All seed accounts are pre-configured in [supabase/seed.sql](file:///d:/my-first-website/hair%20cut%20app/supabase/seed.sql) with the default password: **`Password123!`**
+Pre-configured development and test accounts (configured via local [supabase/seed.sql](file:///d:/my-first-website/hair%20cut%20app/supabase/seed.sql)):
 
-| Portal / App | Email | Password | Role | Assigned Shop / Scope |
-| :--- | :--- | :--- | :--- | :--- |
-| **Platform Admin** (`/apps/admin`) | `admin@quickcut.com` | `Password123!` | `admin` | Global platform moderation & fee settlement |
-| **Shop Owner** (`/apps/owner`) | `owner.alex@quickcut.com` | `Password123!` | `owner` | Crown & Blade Barbershop (Approved) |
-| **Staff App** (`/apps/staff`) | `staff.sam@quickcut.com` | `Password123!` | `staff` | Crown & Blade Barbershop (Queue & QR scanner) |
-| **Customer App** (`/apps/customer`) | `customer.rahul@quickcut.com` | `Password123!` | `customer` | In-service ticket #101 |
-| **Customer App** (`/apps/customer`) | `customer.priya@quickcut.com` | `Password123!` | `customer` | Waiting queue ticket #102 |
+| Portal / App | Email | Role | Assigned Shop / Scope |
+| :--- | :--- | :--- | :--- |
+| **Platform Admin** (`/apps/admin`) | `admin@quickcut.com` | `admin` | Global platform administration & shop moderation |
+| **Shop Owner** (`/apps/owner`) | `owner.alex@quickcut.com` | `owner` | Crown & Blade Barbershop (Approved) |
+| **Staff App** (`/apps/staff`) | `staff.sam@quickcut.com` | `staff` | Crown & Blade Barbershop (Queue & QR arrival scanner) |
+| **Customer App** (`/apps/customer`) | `customer.rahul@quickcut.com` | `customer` | Active ticket #101 |
+| **Customer App** (`/apps/customer`) | `customer.priya@quickcut.com` | `customer` | Waiting queue ticket #102 |
+
+> [!NOTE]
+> For security, development account passwords should be managed via environment variables (`.env.local`) or generated via your local Supabase test seeds. Never commit production passwords or service-role keys to version control.
 
 ---
 
