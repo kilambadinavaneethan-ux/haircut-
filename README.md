@@ -215,11 +215,13 @@ npm run dev:admin
 npm run dev:owner
 # Accessible on http://localhost:3001
 
-# 3. Run Customer Mobile App (Expo)
+# 3. Run Customer Mobile App (Expo SDK 58)
 npm run dev:customer
-# Press 'a' for Android emulator or scan QR with Expo Go
+# To start with a clean Metro cache: npm run dev:customer -- -c
+# Press 'a' for Android emulator or scan QR with Expo Go (SDK 58)
 
-# 4. Run Staff Mobile App (Expo)
+# 4. Run Staff Mobile App (Expo SDK 58)
 npm run dev:staff
-# Press 'a' for Android emulator or scan QR with Expo Go
+# To start with a clean Metro cache: npm run dev:staff -- -c
+# Press 'a' for Android emulator or scan QR with Expo Go (SDK 58)
 ```
