@@ -14,18 +14,18 @@
   },
   "dependencies": {
     "@quickcut/shared": "*",
-    "expo": "~57.0.31",
-    "expo-camera": "~57.0.6",
-    "expo-notifications": "~57.0.24",
-    "expo-status-bar": "~57.0.1",
-    "react": "19.2.3",
-    "react-native": "0.86.3",
-    "react-native-safe-area-context": "~5.7.0",
+    "expo": "~58.0.25",
+    "expo-camera": "~58.0.14",
+    "expo-notifications": "~58.1.9",
+    "expo-status-bar": "~58.0.5",
+    "react": "19.3.0",
+    "react-native": "0.88.1",
+    "react-native-safe-area-context": "~5.11.1",
     "toqr": "^0.1.1"
   },
   "devDependencies": {
     "@babel/core": "^7.20.0",
-    "@types/react": "~19.2.4",
+    "@types/react": "~19.3.0",
     "typescript": "~6.0.3"
   }
 }

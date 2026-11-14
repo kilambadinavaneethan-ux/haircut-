@@ -3,13 +3,13 @@ import {
   StyleSheet,
   Text,
   View,
-  StatusBar,
   ScrollView,
   TouchableOpacity,
   ActivityIndicator,
   RefreshControl,
   Alert
 } from 'react-native';
+import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   Shop,
@@ -502,7 +502,7 @@ export default function StaffApp() {
   if (!sessionUser) {
     return (
       <SafeAreaView style={styles.container}>
-        <StatusBar barStyle="light-content" backgroundColor="#090D16" />
+        <StatusBar style="light" />
         <StaffAuthScreen
           onLoginSuccess={async () => {
             const { data: { session } } = await supabase.auth.getSession();
@@ -520,7 +520,7 @@ export default function StaffApp() {
   if (!assignedShop) {
     return (
       <SafeAreaView style={styles.container}>
-        <StatusBar barStyle="light-content" backgroundColor="#090D16" />
+        <StatusBar style="light" />
         <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 28 }}>
           <View style={{ width: 56, height: 56, borderRadius: 28, backgroundColor: 'rgba(239, 68, 68, 0.15)', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(239, 68, 68, 0.3)' }}>
             <Text style={{ fontSize: 24 }}>⚠️</Text>
@@ -551,7 +551,7 @@ export default function StaffApp() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#090D16" />
+      <StatusBar style="light" />
 
       {/* Top Header */}
       <View style={styles.header}>

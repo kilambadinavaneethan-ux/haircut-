@@ -3,13 +3,13 @@ import {
   StyleSheet,
   Text,
   View,
-  StatusBar,
   TouchableOpacity,
   ScrollView,
   ActivityIndicator,
   RefreshControl,
   Alert
 } from 'react-native';
+import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   Shop,
@@ -220,7 +220,7 @@ export default function CustomerApp() {
   if (!sessionUser) {
     return (
       <SafeAreaView style={styles.container}>
-        <StatusBar barStyle="light-content" backgroundColor="#0F172A" />
+        <StatusBar style="light" />
         <AuthScreen
           onAuthSuccess={async () => {
             const { data: { session } } = await supabase.auth.getSession();
@@ -236,7 +236,7 @@ export default function CustomerApp() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#0F172A" />
+      <StatusBar style="light" />
 
       {/* Top Header */}
       <View style={styles.header}>
