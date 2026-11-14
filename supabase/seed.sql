@@ -1,5 +1,25 @@
--- QuickCut Platform - Seed Script
+-- ============================================================================
+-- QuickCut Platform - Development & Test Seed Script
 -- File: supabase/seed.sql
+-- ============================================================================
+--
+-- ⚠️  CRITICAL SECURITY WARNING:
+-- This file contains mock test data and development accounts with fixed credentials
+-- (e.g. password: 'Password123!') intended SOLELY FOR LOCAL DEVELOPMENT AND TESTING.
+--
+-- DO NOT EXECUTE THIS FILE AGAINST A PRODUCTION DATABASE OR STAGING ENVIRONMENT.
+-- Production user accounts must be provisioned through authentic Supabase Auth
+-- registration flows with secure, user-defined passwords and multi-factor verification.
+--
+-- ============================================================================
+
+DO $$
+BEGIN
+    -- Safeguard: Abort immediately if explicitly executed on a production-designated environment
+    IF current_setting('app.environment', true) = 'production' THEN
+        RAISE EXCEPTION 'CRITICAL SECURITY VIOLATION: seed.sql cannot be executed in production environment!';
+    END IF;
+END $$;
 
 -- Safe cleanup for fresh seed
 TRUNCATE TABLE public.audit_logs CASCADE;

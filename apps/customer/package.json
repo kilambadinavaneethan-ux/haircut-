@@ -4,6 +4,7 @@
   "private": true,
   "main": "index.js",
   "scripts": {
+    "typecheck": "tsc --noEmit",
     "start": "expo start --port 8081 --lan",
     "start:lan": "expo start --port 8081 --lan",
     "start:tunnel": "expo start --port 8081 --tunnel",

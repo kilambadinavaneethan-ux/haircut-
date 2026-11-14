@@ -1230,4 +1230,250 @@ test('QuickCut Test Suite - Core Business Rules, Security & Invariants', async (
       assert.deepStrictEqual(sortedNumbers, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 'Queue numbers must be contiguous from 1 to 10 starting from an empty counter');
     });
   });
+
+  // =========================================================================
+  // 15. Discrete Multi-Server Wait-Time Simulation & Barber Routing (Task 5)
+  // =========================================================================
+  await t.test('15. Discrete Multi-Server Wait-Time Simulation & Barber Routing', async (suite) => {
+    const servicesMap = {
+      'svc-standard': { id: 'svc-standard', avg_minutes: 25 },
+      'svc-quick': { id: 'svc-quick', avg_minutes: 10 },
+      'svc-beard': { id: 'svc-beard', avg_minutes: 15 }
+    };
+
+    // 15a. Target requesting specific barber vs unassigned customer
+    await suite.test('15a. Discrete Barber Routing: Requested Barber vs Earliest Available Barber', () => {
+      const now = Date.now();
+      const entries = [
+        // Barber 1 in service (25 mins remaining)
+        {
+          id: 'b1-in-service',
+          shop_id: 'shop-1',
+          service_id: 'svc-standard',
+          status: 'in_service' as const,
+          created_at: new Date(now - 1000).toISOString(),
+          called_at: new Date(now).toISOString(),
+          queue_number: 1,
+          is_walkin: false,
+          is_billable: false,
+          queue_date: '2026-10-24',
+          customer_id: 'cust-b1-chair',
+          barber_id: 'barber-1',
+          guest_name: null,
+          guest_phone: null,
+          qr_code_token: 'TOK-1',
+          checked_in_at: new Date(now).toISOString(),
+          completed_at: null,
+          updated_at: new Date(now).toISOString()
+        },
+        // Barber 2 in service (10 mins remaining)
+        {
+          id: 'b2-in-service',
+          shop_id: 'shop-1',
+          service_id: 'svc-quick',
+          status: 'in_service' as const,
+          created_at: new Date(now - 1000).toISOString(),
+          called_at: new Date(now).toISOString(),
+          queue_number: 2,
+          is_walkin: false,
+          is_billable: false,
+          queue_date: '2026-10-24',
+          customer_id: 'cust-b2-chair',
+          barber_id: 'barber-2',
+          guest_name: null,
+          guest_phone: null,
+          qr_code_token: 'TOK-2',
+          checked_in_at: new Date(now).toISOString(),
+          completed_at: null,
+          updated_at: new Date(now).toISOString()
+        },
+        // Waiting customer assigned to Barber 1 (20 mins)
+        {
+          id: 'b1-waiting-ahead',
+          shop_id: 'shop-1',
+          service_id: 'svc-beard', // 15 mins
+          status: 'waiting' as const,
+          created_at: new Date(now + 1000).toISOString(),
+          called_at: null,
+          queue_number: 3,
+          is_walkin: false,
+          is_billable: false,
+          queue_date: '2026-10-24',
+          customer_id: 'cust-b1-wait',
+          barber_id: 'barber-1',
+          guest_name: null,
+          guest_phone: null,
+          qr_code_token: 'TOK-3',
+          checked_in_at: null,
+          completed_at: null,
+          updated_at: new Date(now + 1000).toISOString()
+        },
+        // Target requesting Barber 1: Must wait for Barber 1's chair (25 + 15 = 40 mins)
+        {
+          id: 'target-barber-1',
+          shop_id: 'shop-1',
+          service_id: 'svc-standard',
+          status: 'waiting' as const,
+          created_at: new Date(now + 2000).toISOString(),
+          called_at: null,
+          queue_number: 4,
+          is_walkin: false,
+          is_billable: false,
+          queue_date: '2026-10-24',
+          customer_id: 'cust-target-b1',
+          barber_id: 'barber-1',
+          guest_name: null,
+          guest_phone: null,
+          qr_code_token: 'TOK-4',
+          checked_in_at: null,
+          completed_at: null,
+          updated_at: new Date(now + 2000).toISOString()
+        },
+        // Target with NO preferred barber: Served by Barber 2 when Barber 2 finishes (10 mins)
+        {
+          id: 'target-unassigned',
+          shop_id: 'shop-1',
+          service_id: 'svc-standard',
+          status: 'waiting' as const,
+          created_at: new Date(now + 2000).toISOString(),
+          called_at: null,
+          queue_number: 5,
+          is_walkin: false,
+          is_billable: false,
+          queue_date: '2026-10-24',
+          customer_id: 'cust-target-any',
+          barber_id: null,
+          guest_name: null,
+          guest_phone: null,
+          qr_code_token: 'TOK-5',
+          checked_in_at: null,
+          completed_at: null,
+          updated_at: new Date(now + 2000).toISOString()
+        }
+      ];
+
+      // Calculation for customer requesting Barber 1
+      const calcB1 = calculateEstimatedWaitTime({
+        targetEntryId: 'target-barber-1',
+        queueEntries: entries,
+        servicesMap,
+        activeBarberCount: 2,
+        currentTime: now
+      });
+      assert.strictEqual(calcB1.estimatedMinutes, 40, 'Target requesting Barber 1 must wait 40 mins (25 in-chair + 15 waiting ahead)');
+      assert.strictEqual(calcB1.peopleAhead, 2, 'Only 2 relevant people ahead in Barber 1 chair queue');
+
+      // Calculation for unassigned customer joining at the same queue depth
+      const calcUnassigned = calculateEstimatedWaitTime({
+        targetEntryId: 'target-unassigned',
+        queueEntries: entries,
+        servicesMap,
+        activeBarberCount: 2,
+        currentTime: now
+      });
+      assert.strictEqual(calcUnassigned.estimatedMinutes, 10, 'Unassigned customer takes earliest available barber (Barber 2 ready in 10 mins, NOT naive average)');
+    });
+
+    // 15b. Greedy dispatch of unassigned waiting customer ahead
+    await suite.test('15b. Greedy multi-server dispatch for unassigned waiting customers', () => {
+      const now = Date.now();
+      const entries = [
+        // Barber 1 in service (30 mins remaining)
+        {
+          id: 'b1-busy',
+          shop_id: 'shop-1',
+          service_id: 'svc-standard', // 25 mins
+          status: 'in_service' as const,
+          created_at: new Date(now - 1000).toISOString(),
+          called_at: new Date(now).toISOString(),
+          queue_number: 1,
+          is_walkin: false,
+          is_billable: false,
+          queue_date: '2026-10-24',
+          customer_id: 'cust-1',
+          barber_id: 'barber-1',
+          guest_name: null,
+          guest_phone: null,
+          qr_code_token: 'TOK-1',
+          checked_in_at: new Date(now).toISOString(),
+          completed_at: null,
+          updated_at: new Date(now).toISOString()
+        },
+        // Barber 2 in service (10 mins remaining)
+        {
+          id: 'b2-fast',
+          shop_id: 'shop-1',
+          service_id: 'svc-quick', // 10 mins
+          status: 'in_service' as const,
+          created_at: new Date(now - 1000).toISOString(),
+          called_at: new Date(now).toISOString(),
+          queue_number: 2,
+          is_walkin: false,
+          is_billable: false,
+          queue_date: '2026-10-24',
+          customer_id: 'cust-2',
+          barber_id: 'barber-2',
+          guest_name: null,
+          guest_phone: null,
+          qr_code_token: 'TOK-2',
+          checked_in_at: new Date(now).toISOString(),
+          completed_at: null,
+          updated_at: new Date(now).toISOString()
+        },
+        // Unassigned waiting customer ahead (15 mins) -> Greedy dispatch assigns to Barber 2 (10 + 15 = 25 mins)
+        {
+          id: 'unassigned-ahead',
+          shop_id: 'shop-1',
+          service_id: 'svc-beard', // 15 mins
+          status: 'waiting' as const,
+          created_at: new Date(now + 1000).toISOString(),
+          called_at: null,
+          queue_number: 3,
+          is_walkin: false,
+          is_billable: false,
+          queue_date: '2026-10-24',
+          customer_id: 'cust-3',
+          barber_id: null,
+          guest_name: null,
+          guest_phone: null,
+          qr_code_token: 'TOK-3',
+          checked_in_at: null,
+          completed_at: null,
+          updated_at: new Date(now + 1000).toISOString()
+        },
+        // Target unassigned: Next available chair is Barber 2 (25 mins) vs Barber 1 (25 mins)
+        {
+          id: 'target-entry',
+          shop_id: 'shop-1',
+          service_id: 'svc-quick',
+          status: 'waiting' as const,
+          created_at: new Date(now + 2000).toISOString(),
+          called_at: null,
+          queue_number: 4,
+          is_walkin: false,
+          is_billable: false,
+          queue_date: '2026-10-24',
+          customer_id: 'cust-target',
+          barber_id: null,
+          guest_name: null,
+          guest_phone: null,
+          qr_code_token: 'TOK-4',
+          checked_in_at: null,
+          completed_at: null,
+          updated_at: new Date(now + 2000).toISOString()
+        }
+      ];
+
+      const calc = calculateEstimatedWaitTime({
+        targetEntryId: 'target-entry',
+        queueEntries: entries,
+        servicesMap,
+        activeBarberCount: 2,
+        currentTime: now
+      });
+      // Barber 1 finishes at min 25; Barber 2 finishes at min 10 + 15 = 25. Min = 25.
+      assert.strictEqual(calc.estimatedMinutes, 25, 'Unassigned customer wait accounts for greedy dispatch of preceding waiting cut');
+      assert.strictEqual(calc.isEstimate, true);
+    });
+  });
 });

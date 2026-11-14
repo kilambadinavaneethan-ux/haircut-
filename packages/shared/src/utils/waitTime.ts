@@ -10,8 +10,11 @@ export interface WaitTimeInput {
 
 /**
  * Calculates estimated wait time for a given queue entry:
- * - Factors in parallel active barbers (M/G/c queue simulation) or barber-specific chair routing.
- * - Deducts elapsed service time for customers already in chair.
+ * - When barber assignments exist: models individual barber workload channels (discrete simulation),
+ *   deducting elapsed time for in-chair cuts, routing unassigned customers to earliest free barber,
+ *   and computing requested barber chair wait time.
+ * - When no specific barber assignments exist (general shop pool): calculates workload ahead
+ *   divided across parallel active barbers.
  * - Clearly demarcated as an estimate with disclaimer.
  */
 export function calculateEstimatedWaitTime(input: WaitTimeInput): EstimatedWaitCalculation {
@@ -29,22 +32,13 @@ export function calculateEstimatedWaitTime(input: WaitTimeInput): EstimatedWaitC
     return defaultResult;
   }
 
-  // If customer selected a specific barber, wait time is determined by that single chair (c = 1)
-  const isBarberSpecific = !!target.barber_id;
-  const barbers = isBarberSpecific ? 1 : Math.max(1, activeBarberCount);
-
   const targetCreatedTime = new Date(target.created_at).getTime();
 
   // Find all active queue entries for the same shop ahead of this one
   const entriesAhead = queueEntries.filter(entry => {
     if (entry.shop_id !== target.shop_id) return false;
 
-    // If target has a specific barber, only consider entries for that barber or unassigned pool entries
-    if (isBarberSpecific && entry.barber_id && entry.barber_id !== target.barber_id) {
-      return false;
-    }
-
-    // Entry currently in service counts as time ahead
+    // Entry currently in service
     if (entry.status === 'in_service') return true;
 
     // Waiting entries created before this entry
@@ -56,33 +50,109 @@ export function calculateEstimatedWaitTime(input: WaitTimeInput): EstimatedWaitC
     return false;
   });
 
-  const totalMinutes = entriesAhead.reduce((sum, entry) => {
+  const getEntryDuration = (entry: QueueEntry): number => {
     const service = servicesMap[entry.service_id];
-    const duration = service ? service.avg_minutes : 20; // fallback standard 20 mins
+    const duration = service ? service.avg_minutes : 20;
 
-    // For in-chair customers, deduct elapsed haircut duration
     if (entry.status === 'in_service') {
       const startIso = entry.called_at || entry.created_at;
       const startTime = new Date(startIso).getTime();
       const refTime = currentTime ?? Date.now();
-
-      // If currentTime was not explicitly passed and data is from an older historical date (> 12 hours),
-      // treat elapsed as 0 to avoid expiring mock test entries
       const isHistoricalMock = currentTime === undefined && Math.abs(refTime - startTime) > 12 * 60 * 60 * 1000;
       const elapsedMinutes = isHistoricalMock ? 0 : Math.max(0, Math.floor((refTime - startTime) / 60000));
-      const remainingMinutes = Math.max(1, duration - elapsedMinutes);
-      return sum + remainingMinutes;
+      return Math.max(1, duration - elapsedMinutes);
+    }
+    return duration;
+  };
+
+  // Check if specific barber assignments are present
+  const hasAssignments = !!target.barber_id || entriesAhead.some(e => !!e.barber_id);
+
+  let estimatedMinutes = 0;
+
+  if (hasAssignments) {
+    // Discrete Multi-Server Simulation
+    const barberIds = new Set<string>();
+    if (target.barber_id) barberIds.add(target.barber_id);
+    for (const entry of entriesAhead) {
+      if (entry.barber_id) barberIds.add(entry.barber_id);
     }
 
-    return sum + duration;
-  }, 0);
+    // Ensure we have at least max(activeBarberCount, barberIds.size, 1) channels
+    const totalChannels = Math.max(activeBarberCount, barberIds.size, 1);
+    const channels: { id: string; remainingMinutes: number }[] = [];
 
-  // Divide workload across parallel active barbers
-  const estimatedMinutes = Math.ceil(totalMinutes / barbers);
+    // Add named barber channels
+    let idx = 1;
+    for (const bId of barberIds) {
+      channels.push({ id: bId, remainingMinutes: 0 });
+    }
+    while (channels.length < totalChannels) {
+      channels.push({ id: `generic-channel-${idx++}`, remainingMinutes: 0 });
+    }
+
+    // 1. Process in-service entries
+    const inServiceEntries = entriesAhead.filter(e => e.status === 'in_service');
+    for (const entry of inServiceEntries) {
+      const duration = getEntryDuration(entry);
+      if (entry.barber_id) {
+        const channel = channels.find(c => c.id === entry.barber_id);
+        if (channel) {
+          channel.remainingMinutes += duration;
+        } else {
+          channels.push({ id: entry.barber_id, remainingMinutes: duration });
+        }
+      } else {
+        // Allocate to channel with minimum current workload
+        channels.sort((a, b) => a.remainingMinutes - b.remainingMinutes);
+        channels[0].remainingMinutes += duration;
+      }
+    }
+
+    // 2. Process waiting entries ahead in FIFO order
+    const waitingAhead = entriesAhead
+      .filter(e => e.status === 'waiting')
+      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+
+    for (const entry of waitingAhead) {
+      const duration = getEntryDuration(entry);
+      if (entry.barber_id) {
+        const channel = channels.find(c => c.id === entry.barber_id);
+        if (channel) {
+          channel.remainingMinutes += duration;
+        } else {
+          channels.push({ id: entry.barber_id, remainingMinutes: duration });
+        }
+      } else {
+        // Allocate to earliest available channel (greedy dispatch)
+        channels.sort((a, b) => a.remainingMinutes - b.remainingMinutes);
+        channels[0].remainingMinutes += duration;
+      }
+    }
+
+    // 3. Determine target's wait time
+    if (target.barber_id) {
+      const targetChannel = channels.find(c => c.id === target.barber_id);
+      estimatedMinutes = targetChannel ? targetChannel.remainingMinutes : 0;
+    } else {
+      // Unassigned customer takes whichever barber becomes free next
+      estimatedMinutes = Math.min(...channels.map(c => c.remainingMinutes));
+    }
+  } else {
+    // General Shop Pool (no specific barber assignments)
+    const barbers = Math.max(1, activeBarberCount);
+    const totalMinutes = entriesAhead.reduce((sum, entry) => sum + getEntryDuration(entry), 0);
+    estimatedMinutes = Math.ceil(totalMinutes / barbers);
+  }
+
+  // Count relevant people ahead
+  const relevantPeopleAhead = target.barber_id
+    ? entriesAhead.filter(e => !e.barber_id || e.barber_id === target.barber_id).length
+    : entriesAhead.length;
 
   return {
     estimatedMinutes,
-    peopleAhead: entriesAhead.length,
+    peopleAhead: relevantPeopleAhead,
     isEstimate: true,
     disclaimer: 'Estimated wait is approximate and dynamically calculated based on queue progress and active barbers.'
   };
