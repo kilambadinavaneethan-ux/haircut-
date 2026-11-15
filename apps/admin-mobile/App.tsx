@@ -20,6 +20,8 @@ import {
   AuditLog,
   SupportTicket,
   QueueEntry,
+  Barber,
+  ShopStaff,
   getSupabaseClient
 } from '@quickcut/shared';
 
@@ -73,9 +75,12 @@ export default function AdminMobileApp() {
   const [authSuccess, setAuthSuccess] = useState<string | null>(null);
 
   // Admin Data state
-  const [activeTab, setActiveTab] = useState<'shops' | 'accounts' | 'metrics' | 'audit' | 'tickets'>('shops');
+  const [activeTab, setActiveTab] = useState<'shops' | 'accounts' | 'staff' | 'metrics' | 'audit' | 'tickets'>('shops');
   const [shops, setShops] = useState<Shop[]>(SEED_SHOPS);
   const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [barbers, setBarbers] = useState<(Barber & { shop?: { name: string; address: string; owner_id: string } })[]>([]);
+  const [shopStaff, setShopStaff] = useState<(ShopStaff & { profile?: Profile; shop?: { name: string; address: string } })[]>([]);
+  const [referralCounts, setReferralCounts] = useState<Record<string, number>>({});
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [tickets, setTickets] = useState<SupportTicket[]>([]);
   const [queueEntries, setQueueEntries] = useState<QueueEntry[]>([]);
@@ -87,6 +92,8 @@ export default function AdminMobileApp() {
   const [searchQuery, setSearchQuery] = useState('');
   const [accountFilter, setAccountFilter] = useState<'all' | 'admin' | 'owner' | 'staff' | 'customer'>('all');
   const [accountSearch, setAccountSearch] = useState('');
+  const [staffFilter, setStaffFilter] = useState<'all' | 'serving' | 'break'>('all');
+  const [staffSearch, setStaffSearch] = useState('');
 
   // Modals inside Admin App
   const [createAccountModalVisible, setCreateAccountModalVisible] = useState(false);
@@ -168,6 +175,35 @@ export default function AdminMobileApp() {
         .select('*')
         .order('created_at', { ascending: false });
       if (dbTickets) setTickets(dbTickets as SupportTicket[]);
+
+      // Load all barbers with shop details
+      const { data: dbBarbers } = await supabase
+        .from('barbers')
+        .select('*, shop:shops(name, address, owner_id)')
+        .order('created_at', { ascending: false });
+      if (dbBarbers) setBarbers(dbBarbers as any);
+
+      // Load shop_staff with profiles and shops
+      const { data: dbStaff } = await supabase
+        .from('shop_staff')
+        .select('*, profile:profiles(full_name, phone, role, referral_code), shop:shops(name, address)')
+        .order('created_at', { ascending: false });
+      if (dbStaff) setShopStaff(dbStaff as any);
+
+      // Load referrals to calculate customer attribution counts
+      const { data: dbReferrals } = await supabase.from('referrals').select('*');
+      if (dbReferrals) {
+        const counts: Record<string, number> = {};
+        dbReferrals.forEach((r: any) => {
+          if (r.referrer_user_id) counts[r.referrer_user_id] = (counts[r.referrer_user_id] || 0) + 1;
+          if (r.barber_id) counts[r.barber_id] = (counts[r.barber_id] || 0) + 1;
+          if (r.referral_code) {
+            const up = r.referral_code.toUpperCase();
+            counts[up] = (counts[up] || 0) + 1;
+          }
+        });
+        setReferralCounts(counts);
+      }
     } catch {
       // Keep state
     } finally {
@@ -537,6 +573,35 @@ export default function AdminMobileApp() {
     return matchesRole && matchesSearch;
   });
 
+  const handleAdminToggleBarber = async (barber: Barber) => {
+    try {
+      const nextActive = !barber.is_active;
+      const { error } = await (supabase.from('barbers') as any)
+        .update({ is_active: nextActive })
+        .eq('id', barber.id);
+      if (error) throw error;
+      Alert.alert('Duty Status Updated', `${barber.name} status is now ${nextActive ? 'Serving (Active)' : 'On Break'}.`);
+      await loadAdminData();
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Could not update barber status.');
+    }
+  };
+
+  // Filtered barbers
+  const filteredBarbers = barbers.filter((b) => {
+    const matchesFilter =
+      staffFilter === 'all' ||
+      (staffFilter === 'serving' && b.is_active) ||
+      (staffFilter === 'break' && !b.is_active);
+    const searchLower = staffSearch.toLowerCase();
+    const assignedShop = b.shop || shops.find((s) => s.id === b.shop_id);
+    const matchesSearch =
+      b.name.toLowerCase().includes(searchLower) ||
+      (assignedShop && assignedShop.name.toLowerCase().includes(searchLower)) ||
+      (b.referral_code && b.referral_code.toLowerCase().includes(searchLower));
+    return matchesFilter && matchesSearch;
+  });
+
   // ==========================================
   // RENDER: Loading State
   // ==========================================
@@ -771,51 +836,66 @@ export default function AdminMobileApp() {
       </View>
 
       {/* Navigation Sub-Tabs */}
-      <View style={styles.tabBar}>
-        <TouchableOpacity
-          style={[styles.tabItem, activeTab === 'shops' && styles.tabItemActive]}
-          onPress={() => setActiveTab('shops')}
+      <View style={styles.tabBarWrapper}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.tabBarScroll}
         >
-          <Text style={[styles.tabItemText, activeTab === 'shops' && styles.tabItemTextActive]}>
-            💈 Shops ({totalShopsCount})
-          </Text>
-        </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.tabItem, activeTab === 'shops' && styles.tabItemActive]}
+            onPress={() => setActiveTab('shops')}
+          >
+            <Text style={[styles.tabItemText, activeTab === 'shops' && styles.tabItemTextActive]}>
+              💈 Shops ({totalShopsCount})
+            </Text>
+          </TouchableOpacity>
 
-        <TouchableOpacity
-          style={[styles.tabItem, activeTab === 'accounts' && styles.tabItemActive]}
-          onPress={() => setActiveTab('accounts')}
-        >
-          <Text style={[styles.tabItemText, activeTab === 'accounts' && styles.tabItemTextActive]}>
-            👥 Customers ({customerCount})
-          </Text>
-        </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.tabItem, activeTab === 'accounts' && styles.tabItemActive]}
+            onPress={() => setActiveTab('accounts')}
+          >
+            <Text style={[styles.tabItemText, activeTab === 'accounts' && styles.tabItemTextActive]}>
+              👥 Customers ({customerCount})
+            </Text>
+          </TouchableOpacity>
 
-        <TouchableOpacity
-          style={[styles.tabItem, activeTab === 'metrics' && styles.tabItemActive]}
-          onPress={() => setActiveTab('metrics')}
-        >
-          <Text style={[styles.tabItemText, activeTab === 'metrics' && styles.tabItemTextActive]}>
-            📊 Metrics
-          </Text>
-        </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.tabItem, activeTab === 'staff' && styles.tabItemActive]}
+            onPress={() => setActiveTab('staff')}
+          >
+            <Text style={[styles.tabItemText, activeTab === 'staff' && styles.tabItemTextActive]}>
+              ✂️ Staff ({barbers.length})
+            </Text>
+          </TouchableOpacity>
 
-        <TouchableOpacity
-          style={[styles.tabItem, activeTab === 'audit' && styles.tabItemActive]}
-          onPress={() => setActiveTab('audit')}
-        >
-          <Text style={[styles.tabItemText, activeTab === 'audit' && styles.tabItemTextActive]}>
-            🔍 Audit
-          </Text>
-        </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.tabItem, activeTab === 'metrics' && styles.tabItemActive]}
+            onPress={() => setActiveTab('metrics')}
+          >
+            <Text style={[styles.tabItemText, activeTab === 'metrics' && styles.tabItemTextActive]}>
+              📊 Metrics
+            </Text>
+          </TouchableOpacity>
 
-        <TouchableOpacity
-          style={[styles.tabItem, activeTab === 'tickets' && styles.tabItemActive]}
-          onPress={() => setActiveTab('tickets')}
-        >
-          <Text style={[styles.tabItemText, activeTab === 'tickets' && styles.tabItemTextActive]}>
-            🎫 Tickets
-          </Text>
-        </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.tabItem, activeTab === 'audit' && styles.tabItemActive]}
+            onPress={() => setActiveTab('audit')}
+          >
+            <Text style={[styles.tabItemText, activeTab === 'audit' && styles.tabItemTextActive]}>
+              🔍 Audit
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.tabItem, activeTab === 'tickets' && styles.tabItemActive]}
+            onPress={() => setActiveTab('tickets')}
+          >
+            <Text style={[styles.tabItemText, activeTab === 'tickets' && styles.tabItemTextActive]}>
+              🎫 Tickets
+            </Text>
+          </TouchableOpacity>
+        </ScrollView>
       </View>
 
       <ScrollView
@@ -1071,6 +1151,24 @@ export default function AdminMobileApp() {
                       </Text>
                       <Text style={styles.accountPhone}>📞 {p.phone || 'No phone'}</Text>
                       <Text style={styles.accountIdText}>ID: {p.id.slice(0, 14)}...</Text>
+                      {p.role === 'staff' && (
+                        (() => {
+                          const linkedB = barbers.find((b) => b.user_id === p.id);
+                          const linkedS = shopStaff.find((s) => s.user_id === p.id);
+                          const shop = linkedB?.shop || linkedS?.shop || shops.find((s) => s.id === linkedS?.shop_id);
+                          const code = linkedB?.referral_code || p.referral_code || `STF-${p.full_name.split(' ')[0].toUpperCase()}`;
+                          const refCnt = referralCounts[p.id] || referralCounts[code] || 0;
+                          return (
+                            <View style={{ marginTop: 3 }}>
+                              {shop && <Text style={styles.accountExtraShop}>🏬 {shop.name}</Text>}
+                              <Text style={styles.accountExtraCode}>🎁 Code: {code} • {refCnt} referred</Text>
+                            </View>
+                          );
+                        })()
+                      )}
+                      {p.role === 'customer' && p.referred_by_code && (
+                        <Text style={styles.accountReferredTag}>🎁 Referred by: {p.referred_by_code}</Text>
+                      )}
                     </View>
 
                     <View style={styles.roleCol}>
@@ -1114,7 +1212,180 @@ export default function AdminMobileApp() {
         )}
 
         {/* ======================================= */}
-        {/* TAB 3: LIVE METRICS & POLICY            */}
+        {/* TAB 3: FULL STAFF BARBERS & STATIONS    */}
+        {/* ======================================= */}
+        {activeTab === 'staff' && (
+          <View>
+            {/* Stat Banner for Staff */}
+            <View style={styles.statBanner}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                <Text style={styles.statBannerTitle}>✂️ Total Staff Barbers: {barbers.length}</Text>
+                <View style={[styles.statBannerBadge, { backgroundColor: 'rgba(56, 189, 248, 0.15)', borderColor: '#38BDF8' }]}>
+                  <Text style={[styles.statBannerBadgeText, { color: '#38BDF8' }]}>
+                    {barbers.filter((b) => b.is_active).length} SERVING ACTIVE
+                  </Text>
+                </View>
+              </View>
+              <Text style={styles.statBannerSubtitle}>
+                {barbers.filter((b) => b.is_active).length} Serving Customers • {barbers.filter((b) => !b.is_active).length} On Break • Across {shops.length} Barbershops
+              </Text>
+            </View>
+
+            {/* Section Header */}
+            <View style={styles.sectionHeaderRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.sectionHeading}>Platform Staff Barbers</Text>
+                <Text style={styles.sectionSubtitle}>
+                  Complete barber duty records, shop assignments, login user IDs, and referral codes.
+                </Text>
+              </View>
+            </View>
+
+            {/* Search Box */}
+            <View style={styles.searchBox}>
+              <TextInput
+                style={styles.searchInput}
+                placeholder="Search staff by barber name, shop, or code..."
+                placeholderTextColor="#64748B"
+                value={staffSearch}
+                onChangeText={setStaffSearch}
+              />
+            </View>
+
+            {/* Filter Row: ALL | SERVING | ON BREAK */}
+            <View style={styles.filterRow}>
+              {(['all', 'serving', 'break'] as const).map((sf) => (
+                <TouchableOpacity
+                  key={sf}
+                  style={[styles.filterChip, staffFilter === sf && styles.filterChipActive]}
+                  onPress={() => setStaffFilter(sf)}
+                >
+                  <Text
+                    style={[
+                      styles.filterChipText,
+                      staffFilter === sf && styles.filterChipTextActive
+                    ]}
+                  >
+                    {sf === 'all' && `ALL (${barbers.length})`}
+                    {sf === 'serving' && `🟢 SERVING (${barbers.filter((b) => b.is_active).length})`}
+                    {sf === 'break' && `⚪ ON BREAK (${barbers.filter((b) => !b.is_active).length})`}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            {/* Staff Cards List */}
+            {filteredBarbers.length === 0 ? (
+              <View style={styles.emptyState}>
+                <Text style={styles.emptyTitle}>No Staff Barbers Found</Text>
+                <Text style={styles.emptySubtitle}>
+                  No barbers match the search query or duty filter.
+                </Text>
+              </View>
+            ) : (
+              filteredBarbers.map((b) => {
+                const linkedStaff = shopStaff.find((s) => s.user_id === b.user_id);
+                const staffProfile = linkedStaff?.profile;
+                const assignedShop = b.shop || shops.find((s) => s.id === b.shop_id);
+                const refCode = b.referral_code || `STF-${b.name.replace(/[^a-zA-Z0-9 ]/g, '').split(' ')[0].toUpperCase()}`;
+                const totalReferred = (b.user_id && referralCounts[b.user_id]) || referralCounts[b.id] || referralCounts[refCode] || 0;
+
+                return (
+                  <View key={b.id} style={styles.staffAdminCard}>
+                    {/* Top Row: Avatar, Name, Role, Status */}
+                    <View style={styles.staffAdminCardTop}>
+                      <View style={styles.staffAdminAvatar}>
+                        <Text style={styles.staffAdminAvatarEmoji}>💈</Text>
+                      </View>
+                      <View style={{ flex: 1, marginLeft: 12 }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                          <Text style={styles.staffAdminName}>{b.name}</Text>
+                          <View style={styles.staffAdminRoleBadge}>
+                            <Text style={styles.staffAdminRoleText}>
+                              {(linkedStaff?.role || 'BARBER').toUpperCase()}
+                            </Text>
+                          </View>
+                        </View>
+                        <Text style={styles.staffAdminShopName}>
+                          🏬 {assignedShop?.name || 'Assigned Barbershop'}
+                        </Text>
+                      </View>
+
+                      {/* Active Status Badge */}
+                      <TouchableOpacity
+                        style={[
+                          styles.staffStatusBadge,
+                          b.is_active ? styles.staffStatusActive : styles.staffStatusInactive
+                        ]}
+                        onPress={() => handleAdminToggleBarber(b)}
+                      >
+                        <Text
+                          style={[
+                            styles.staffStatusText,
+                            b.is_active ? styles.staffStatusTextActive : styles.staffStatusTextInactive
+                          ]}
+                        >
+                          {b.is_active ? '🟢 Serving' : '⚪ On Break'}
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+
+                    {/* Detailed Info Grid */}
+                    <View style={styles.staffAdminDetailBox}>
+                      <View style={styles.staffDetailRow}>
+                        <Text style={styles.staffDetailLabel}>📍 Shop Location:</Text>
+                        <Text style={styles.staffDetailValue} numberOfLines={1}>
+                          {assignedShop?.address || 'Indiranagar, Bengaluru'}
+                        </Text>
+                      </View>
+
+                      <View style={styles.staffDetailRow}>
+                        <Text style={styles.staffDetailLabel}>📞 Contact Phone:</Text>
+                        <Text style={styles.staffDetailValue}>
+                          {staffProfile?.phone || 'No direct phone (Shop line)'}
+                        </Text>
+                      </View>
+
+                      <View style={styles.staffDetailRow}>
+                        <Text style={styles.staffDetailLabel}>🆔 Login User ID:</Text>
+                        <Text style={[styles.staffDetailValue, { fontFamily: Platform?.OS === 'ios' ? 'Courier' : 'monospace', fontSize: 11 }]}>
+                          {b.user_id || 'Station Chair (No account linked)'}
+                        </Text>
+                      </View>
+
+                      {/* Personal Referral Code & Attribution */}
+                      <View style={styles.staffReferralHighlightRow}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.staffReferralHighlightLabel}>🎁 Barber Referral Code:</Text>
+                          <Text style={styles.staffReferralHighlightCode}>{refCode}</Text>
+                        </View>
+                        <View style={styles.staffReferralMetricBadge}>
+                          <Text style={styles.staffReferralMetricNumber}>{totalReferred}</Text>
+                          <Text style={styles.staffReferralMetricText}>Referred</Text>
+                        </View>
+                      </View>
+                    </View>
+
+                    {/* Actions */}
+                    <View style={styles.staffAdminCardActions}>
+                      <TouchableOpacity
+                        style={styles.staffAdminToggleBtn}
+                        onPress={() => handleAdminToggleBarber(b)}
+                      >
+                        <Text style={styles.staffAdminToggleText}>
+                          {b.is_active ? '⏸️ Set to Break' : '▶️ Set to Serving'}
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                );
+              })
+            )}
+          </View>
+        )}
+
+        {/* ======================================= */}
+        {/* TAB 4: LIVE METRICS & POLICY            */}
         {/* ======================================= */}
         {activeTab === 'metrics' && (
           <View>
@@ -1646,6 +1917,16 @@ const styles = StyleSheet.create({
   },
 
   // Tab Bar
+  tabBarWrapper: {
+    backgroundColor: '#0F172A',
+    borderBottomWidth: 1,
+    borderBottomColor: '#1E293B'
+  },
+  tabBarScroll: {
+    paddingHorizontal: 8,
+    flexDirection: 'row',
+    alignItems: 'center'
+  },
   tabBar: {
     flexDirection: 'row',
     backgroundColor: '#0F172A',
@@ -1653,8 +1934,8 @@ const styles = StyleSheet.create({
     borderBottomColor: '#1E293B'
   },
   tabItem: {
-    flex: 1,
-    paddingVertical: 11,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
     alignItems: 'center'
   },
   tabItemActive: {
@@ -1662,12 +1943,193 @@ const styles = StyleSheet.create({
     borderBottomColor: '#F59E0B'
   },
   tabItemText: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '600',
     color: '#64748B'
   },
   tabItemTextActive: {
+    color: '#F59E0B',
+    fontWeight: '700'
+  },
+
+  // Account Card Extras
+  accountExtraShop: {
+    fontSize: 11,
+    color: '#38BDF8',
+    fontWeight: '600'
+  },
+  accountExtraCode: {
+    fontSize: 11,
+    color: '#F59E0B',
+    fontWeight: '700',
+    marginTop: 1
+  },
+  accountReferredTag: {
+    fontSize: 11,
+    color: '#10B981',
+    fontWeight: '600',
+    marginTop: 2
+  },
+
+  // Full Staff Admin Styles
+  staffAdminCard: {
+    backgroundColor: '#111827',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#1F2937'
+  },
+  staffAdminCardTop: {
+    flexDirection: 'row',
+    alignItems: 'center'
+  },
+  staffAdminAvatar: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#1E293B',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#38BDF8'
+  },
+  staffAdminAvatarEmoji: {
+    fontSize: 20
+  },
+  staffAdminName: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#F8FAFC'
+  },
+  staffAdminRoleBadge: {
+    backgroundColor: 'rgba(56, 189, 248, 0.15)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4
+  },
+  staffAdminRoleText: {
+    color: '#38BDF8',
+    fontSize: 9,
+    fontWeight: '800'
+  },
+  staffAdminShopName: {
+    fontSize: 12,
+    color: '#94A3B8',
+    marginTop: 3,
+    fontWeight: '600'
+  },
+  staffStatusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 10
+  },
+  staffStatusActive: {
+    backgroundColor: 'rgba(16, 185, 129, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(16, 185, 129, 0.4)'
+  },
+  staffStatusInactive: {
+    backgroundColor: 'rgba(148, 163, 184, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(148, 163, 184, 0.4)'
+  },
+  staffStatusText: {
+    fontSize: 10,
+    fontWeight: '700'
+  },
+  staffStatusTextActive: {
+    color: '#10B981'
+  },
+  staffStatusTextInactive: {
+    color: '#94A3B8'
+  },
+  staffAdminDetailBox: {
+    backgroundColor: '#0A0F1D',
+    borderRadius: 10,
+    padding: 10,
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: '#1E293B'
+  },
+  staffDetailRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 5
+  },
+  staffDetailLabel: {
+    fontSize: 11,
+    color: '#64748B',
+    fontWeight: '600'
+  },
+  staffDetailValue: {
+    fontSize: 11,
+    color: '#CBD5E1',
+    fontWeight: '600',
+    maxWidth: '65%'
+  },
+  staffReferralHighlightRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#111827',
+    padding: 8,
+    borderRadius: 8,
+    marginTop: 4,
+    borderWidth: 1,
+    borderColor: '#1F2937'
+  },
+  staffReferralHighlightLabel: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#F59E0B',
+    letterSpacing: 0.5
+  },
+  staffReferralHighlightCode: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#F8FAFC',
+    letterSpacing: 0.5,
+    marginTop: 1
+  },
+  staffReferralMetricBadge: {
+    backgroundColor: 'rgba(245, 158, 11, 0.15)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(245, 158, 11, 0.4)'
+  },
+  staffReferralMetricNumber: {
+    fontSize: 13,
+    fontWeight: '900',
     color: '#F59E0B'
+  },
+  staffReferralMetricText: {
+    fontSize: 8,
+    fontWeight: '700',
+    color: '#F59E0B',
+    textTransform: 'uppercase'
+  },
+  staffAdminCardActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    marginTop: 8
+  },
+  staffAdminToggleBtn: {
+    backgroundColor: '#1E293B',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#334155'
+  },
+  staffAdminToggleText: {
+    fontSize: 11,
+    color: '#CBD5E1',
+    fontWeight: '700'
   },
 
   scrollBody: {

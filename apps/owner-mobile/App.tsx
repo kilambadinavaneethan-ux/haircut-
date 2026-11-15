@@ -1337,6 +1337,33 @@ export default function OwnerMobileApp() {
               </Text>
             </View>
 
+            {/* Shop Owner Referral Code Card */}
+            <View style={styles.ownerReferralCard}>
+              <View style={styles.ownerReferralHeader}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.ownerReferralTag}>🏬 SHOP OWNER REFERRAL CODE</Text>
+                  <Text style={styles.ownerReferralCode}>
+                    {activeShop.referral_code || `${activeShop.name.replace(/[^a-zA-Z0-9]/g, '').toUpperCase()}2026`}
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.ownerReferralCopyBtn}
+                  onPress={() => {
+                    const code = activeShop.referral_code || `${activeShop.name.replace(/[^a-zA-Z0-9]/g, '').toUpperCase()}2026`;
+                    Alert.alert(
+                      'Shop Referral Code',
+                      `Give this code to new customers:\n\n${code}\n\nCustomers enter this code when creating their account in the Customer App to link with ${activeShop.name}.`
+                    );
+                  }}
+                >
+                  <Text style={styles.ownerReferralCopyText}>📋 Share Code</Text>
+                </TouchableOpacity>
+              </View>
+              <Text style={styles.ownerReferralDesc}>
+                Give this code to customers when they register in the Customer App. You can also give any barber&apos;s individual code below!
+              </Text>
+            </View>
+
             {barbers.length === 0 ? (
               <View style={styles.emptyCard}>
                 <Text style={styles.emptyEmoji}>💈</Text>
@@ -1395,6 +1422,28 @@ export default function OwnerMobileApp() {
                         >
                           {b.is_active ? '🟢 Serving' : '⚪ On Break'}
                         </Text>
+                      </TouchableOpacity>
+                    </View>
+
+                    {/* Barber Personal Referral Code */}
+                    <View style={styles.barberReferralRow}>
+                      <View style={styles.barberReferralPill}>
+                        <Text style={styles.barberReferralLabel}>🎁 Referral Code:</Text>
+                        <Text style={styles.barberReferralCodeText}>
+                          {b.referral_code || `STF-${b.name.replace(/[^a-zA-Z0-9 ]/g, '').split(' ')[0].toUpperCase()}`}
+                        </Text>
+                      </View>
+                      <TouchableOpacity
+                        style={styles.barberCopyBtn}
+                        onPress={() => {
+                          const code = b.referral_code || `STF-${b.name.replace(/[^a-zA-Z0-9 ]/g, '').split(' ')[0].toUpperCase()}`;
+                          Alert.alert(
+                            'Staff Referral Code',
+                            `Share this code with customers for ${b.name}:\n\n${code}\n\nCustomers enter this code when signing up in the Customer App.`
+                          );
+                        }}
+                      >
+                        <Text style={styles.barberCopyText}>📋 Copy Code</Text>
                       </TouchableOpacity>
                     </View>
 
@@ -2470,6 +2519,92 @@ const styles = StyleSheet.create({
     color: '#94A3B8',
     fontSize: 11,
     lineHeight: 16
+  },
+  ownerReferralCard: {
+    backgroundColor: '#0F172A',
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: '#1E293B',
+    borderLeftWidth: 4,
+    borderLeftColor: '#F59E0B'
+  },
+  ownerReferralHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6
+  },
+  ownerReferralTag: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#F59E0B',
+    letterSpacing: 0.5
+  },
+  ownerReferralCode: {
+    fontSize: 18,
+    fontWeight: '900',
+    color: '#F8FAFC',
+    marginTop: 2,
+    letterSpacing: 1
+  },
+  ownerReferralCopyBtn: {
+    backgroundColor: 'rgba(245, 158, 11, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(245, 158, 11, 0.4)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 6
+  },
+  ownerReferralCopyText: {
+    color: '#F59E0B',
+    fontSize: 11,
+    fontWeight: '700'
+  },
+  ownerReferralDesc: {
+    color: '#94A3B8',
+    fontSize: 11,
+    lineHeight: 15
+  },
+  barberReferralRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#0F172A',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: '#1E293B'
+  },
+  barberReferralPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6
+  },
+  barberReferralLabel: {
+    fontSize: 10,
+    color: '#94A3B8',
+    fontWeight: '600'
+  },
+  barberReferralCodeText: {
+    fontSize: 12,
+    color: '#38BDF8',
+    fontWeight: '800',
+    letterSpacing: 0.5
+  },
+  barberCopyBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 4,
+    backgroundColor: '#1E293B'
+  },
+  barberCopyText: {
+    fontSize: 10,
+    color: '#CBD5E1',
+    fontWeight: '600'
   },
   staffCard: {
     backgroundColor: '#111827',

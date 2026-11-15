@@ -4,4 +4,5 @@ export * from './constants/config';
 export * from './utils/waitTime';
 export * from './utils/billable';
 export * from './utils/qr';
+export * from './utils/referral';
 export * from './supabase/client';

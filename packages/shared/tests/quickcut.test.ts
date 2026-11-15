@@ -11,6 +11,7 @@ import {
   formatEstimatedWaitDisplay,
   generateQueueQRPayload,
   parseQueueQRPayload,
+  validateReferralCode,
   PLATFORM_CONFIG
 } from '../src/index';
 
@@ -2294,6 +2295,68 @@ test('QuickCut Test Suite - Core Business Rules, Security & Invariants', async (
       assert.throws(() => {
         evaluateStorageInsertPolicy(callerA, 'avatars', 'user-A/document.pdf', 'application/pdf', 50000);
       }, /File type application\/pdf not allowed/);
+    });
+  });
+
+  // =========================================================================
+  // 18. Customer Referral Code System (Staff & Owner Attribution Invariants)
+  // =========================================================================
+  await t.test('18. Customer Referral Code System (Staff & Owner Attribution)', async (suite) => {
+    // 18a. Staff referral code validation
+    await suite.test('18a. Staff barber code STF-SAM resolves to Sam Wilson and Crown & Blade', async () => {
+      const res = await validateReferralCode('STF-SAM');
+      assert.strictEqual(res.valid, true);
+      assert.strictEqual(res.referrer_type, 'staff');
+      assert.strictEqual(res.referrer_name, 'Sam Wilson (Master Stylist)');
+      assert.strictEqual(res.shop_name, 'Crown & Blade Barbershop');
+    });
+
+    // 18b. Staff barber code STF-NAVA resolves to Nava ee
+    await suite.test('18b. Staff barber code STF-NAVA resolves to Nava ee', async () => {
+      const res = await validateReferralCode('STF-NAVA');
+      assert.strictEqual(res.valid, true);
+      assert.strictEqual(res.referrer_type, 'staff');
+      assert.strictEqual(res.referrer_name, 'Nava ee');
+      assert.strictEqual(res.shop_name, 'Crown & Blade Barbershop');
+    });
+
+    // 18c. Shop Owner referral code validation
+    await suite.test('18c. Shop Owner code CROWN2026 resolves to Alex Miller and Crown & Blade', async () => {
+      const res = await validateReferralCode('CROWN2026');
+      assert.strictEqual(res.valid, true);
+      assert.strictEqual(res.referrer_type, 'owner');
+      assert.strictEqual(res.referrer_name, 'Alex Miller');
+      assert.strictEqual(res.shop_name, 'Crown & Blade Barbershop');
+    });
+
+    // 18d. Short code and case-insensitivity
+    await suite.test('18d. Short codes and lower case input resolve properly', async () => {
+      const resShortShop = await validateReferralCode('crown');
+      assert.strictEqual(resShortShop.valid, true);
+      assert.strictEqual(resShortShop.referrer_type, 'owner');
+
+      const resShortStaff = await validateReferralCode('sam');
+      assert.strictEqual(resShortStaff.valid, true);
+      assert.strictEqual(resShortStaff.referrer_type, 'staff');
+
+      const resLowerNava = await validateReferralCode('stf-nava');
+      assert.strictEqual(resLowerNava.valid, true);
+      assert.strictEqual(resLowerNava.referrer_type, 'staff');
+    });
+
+    // 18e. Invalid and blank code rejection
+    await suite.test('18e. Invalid or blank referral code is safely rejected', async () => {
+      const resBlank = await validateReferralCode('');
+      assert.strictEqual(resBlank.valid, false);
+
+      const resInvalid = await validateReferralCode('NONEXISTENT_CODE_XYZ');
+      assert.strictEqual(resInvalid.valid, false);
+      assert.match(resInvalid.message || '', /not found|verify/i);
+    });
+
+    // 18f. Platform Fee Invariant (Referral system operates strictly at ₹0 fee)
+    await suite.test('18f. Platform fee remains strictly ₹0 with referral codes', () => {
+      assert.strictEqual(PLATFORM_CONFIG.BILLABLE_FEE_PER_SERVICE, 0.0);
     });
   });
 });

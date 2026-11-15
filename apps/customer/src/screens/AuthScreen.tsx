@@ -10,7 +10,12 @@ import {
   Platform,
   ScrollView
 } from 'react-native';
-import { getSupabaseClient } from '@quickcut/shared';
+import {
+  getSupabaseClient,
+  validateReferralCode,
+  applyCustomerReferral,
+  ReferralValidationResult
+} from '@quickcut/shared';
 
 interface AuthScreenProps {
   onAuthSuccess: (user?: { id: string; email: string }) => void;
@@ -22,11 +27,40 @@ export function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [phone, setPhone] = useState('');
+  const [referralCode, setReferralCode] = useState('');
+  const [referralValidation, setReferralValidation] = useState<ReferralValidationResult | null>(null);
+  const [validatingReferral, setValidatingReferral] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const supabase = getSupabaseClient();
+
+  const handleReferralCodeChange = async (text: string) => {
+    const uppercase = text.toUpperCase();
+    setReferralCode(uppercase);
+
+    const trimmed = uppercase.trim();
+    if (!trimmed) {
+      setReferralValidation(null);
+      return;
+    }
+
+    if (trimmed.length < 3) {
+      setReferralValidation(null);
+      return;
+    }
+
+    setValidatingReferral(true);
+    try {
+      const result = await validateReferralCode(trimmed);
+      setReferralValidation(result);
+    } catch {
+      setReferralValidation(null);
+    } finally {
+      setValidatingReferral(false);
+    }
+  };
 
   const handleAuth = async () => {
     setErrorMessage(null);
@@ -58,12 +92,23 @@ export function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
             data: {
               full_name: fullName.trim(),
               phone: phone.trim() || null,
-              role: 'customer'
+              role: 'customer',
+              referral_code: referralValidation?.valid ? referralValidation.referral_code : null
             }
           }
         });
 
         if (error) throw error;
+
+        // Apply referral if provided
+        const registeredUserId = data.session?.user?.id || data.user?.id;
+        if (registeredUserId && referralValidation?.valid && referralValidation.referral_code) {
+          try {
+            await applyCustomerReferral(registeredUserId, referralValidation.referral_code);
+          } catch (refErr) {
+            console.warn('Could not apply customer referral:', refErr);
+          }
+        }
 
         // 1. If Supabase immediately returns a session (auto-confirm enabled)
         if (data.session?.user) {
@@ -85,6 +130,13 @@ export function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
         });
 
         if (signInData?.session?.user) {
+          if (referralValidation?.valid && referralValidation.referral_code) {
+            try {
+              await applyCustomerReferral(signInData.session.user.id, referralValidation.referral_code);
+            } catch (refErr) {
+              console.warn('Could not apply customer referral on signin:', refErr);
+            }
+          }
           onAuthSuccess({ id: signInData.session.user.id, email: signInData.session.user.email || '' });
           return;
         }
@@ -219,17 +271,59 @@ export function AuthScreen({ onAuthSuccess }: AuthScreenProps) {
           </View>
 
           {isSignUp && (
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Phone (Optional)</Text>
-              <TextInput
-                style={styles.textInput}
-                placeholder="+91 98765 43210"
-                placeholderTextColor="#64748B"
-                value={phone}
-                onChangeText={setPhone}
-                keyboardType="phone-pad"
-              />
-            </View>
+            <>
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Phone (Optional)</Text>
+                <TextInput
+                  style={styles.textInput}
+                  placeholder="+91 98765 43210"
+                  placeholderTextColor="#64748B"
+                  value={phone}
+                  onChangeText={setPhone}
+                  keyboardType="phone-pad"
+                />
+              </View>
+
+              {/* Referral Code (Optional) */}
+              <View style={styles.inputGroup}>
+                <View style={styles.referralHeaderRow}>
+                  <Text style={styles.inputLabel}>🎁 Referral Code (Optional)</Text>
+                  <Text style={styles.inputHint}>From Barber / Owner</Text>
+                </View>
+                <TextInput
+                  style={[
+                    styles.textInput,
+                    referralValidation?.valid && styles.textInputSuccess,
+                    referralValidation && !referralValidation.valid && styles.textInputWarning
+                  ]}
+                  placeholder="e.g. STF-NAVA, CROWN2026, STF-SAM"
+                  placeholderTextColor="#64748B"
+                  value={referralCode}
+                  onChangeText={handleReferralCodeChange}
+                  autoCapitalize="characters"
+                  autoCorrect={false}
+                />
+
+                {validatingReferral && (
+                  <Text style={styles.referralValidatingText}>Verifying referral code...</Text>
+                )}
+
+                {referralValidation?.valid && (
+                  <View style={styles.referralValidBox}>
+                    <Text style={styles.referralValidText}>
+                      ✓ Verified: Referred by {referralValidation.referrer_name}
+                      {referralValidation.shop_name ? ` (${referralValidation.shop_name})` : ''}
+                    </Text>
+                  </View>
+                )}
+
+                {referralValidation && !referralValidation.valid && referralCode.length >= 3 && (
+                  <Text style={styles.referralInvalidText}>
+                    ⚠️ {referralValidation.message || 'Referral code not recognized. Leave blank to proceed.'}
+                  </Text>
+                )}
+              </View>
+            </>
           )}
 
           {/* Submit Button */}
@@ -386,6 +480,49 @@ const styles = StyleSheet.create({
     fontSize: 14,
     borderWidth: 1,
     borderColor: '#334155'
+  },
+  textInputSuccess: {
+    borderColor: '#10B981',
+    backgroundColor: 'rgba(16, 185, 129, 0.05)'
+  },
+  textInputWarning: {
+    borderColor: '#F59E0B'
+  },
+  referralHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6
+  },
+  inputHint: {
+    fontSize: 11,
+    color: '#60A5FA',
+    fontWeight: '600'
+  },
+  referralValidBox: {
+    backgroundColor: 'rgba(16, 185, 129, 0.12)',
+    borderWidth: 1,
+    borderColor: '#10B981',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    marginTop: 6
+  },
+  referralValidText: {
+    color: '#10B981',
+    fontSize: 12,
+    fontWeight: '700'
+  },
+  referralValidatingText: {
+    color: '#38BDF8',
+    fontSize: 11,
+    marginTop: 4
+  },
+  referralInvalidText: {
+    color: '#F59E0B',
+    fontSize: 11,
+    marginTop: 4,
+    lineHeight: 16
   },
   submitBtn: {
     backgroundColor: '#F59E0B',

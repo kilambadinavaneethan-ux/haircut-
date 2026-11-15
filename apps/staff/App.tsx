@@ -40,6 +40,10 @@ export default function StaffApp() {
   const [walkinModalVisible, setWalkinModalVisible] = useState(false);
   const [targetEntryForQR, setTargetEntryForQR] = useState<QueueEntryWithDetails | null>(null);
 
+  // Referral state
+  const [staffReferralCode, setStaffReferralCode] = useState<string>('STF-BARBER');
+  const [referralCount, setReferralCount] = useState<number>(0);
+
   const supabase = getSupabaseClient();
 
   // Helper to log all state transitions to audit_logs
@@ -149,6 +153,42 @@ export default function StaffApp() {
         } else {
           setAssignedShop(null);
         }
+      }
+
+      // Load barber's personal referral code and stats
+      try {
+        const { data: bData } = await supabase
+          .from('barbers')
+          .select('id, name, referral_code')
+          .eq('user_id', userId)
+          .maybeSingle();
+
+        const { data: profData } = await supabase
+          .from('profiles')
+          .select('full_name, referral_code')
+          .eq('id', userId)
+          .maybeSingle();
+
+        let code = (bData as any)?.referral_code || (profData as any)?.referral_code;
+        if (!code && (bData as any)?.name) {
+          code = `STF-${(bData as any).name.split(' ')[0].toUpperCase()}`;
+        }
+        if (!code && (profData as any)?.full_name) {
+          code = `STF-${(profData as any).full_name.split(' ')[0].toUpperCase()}`;
+        }
+        if (!code) {
+          code = `STF-${userId.slice(0, 4).toUpperCase()}`;
+        }
+        setStaffReferralCode(code);
+
+        // Fetch total referrals attributed
+        const { count } = await supabase
+          .from('referrals')
+          .select('*', { count: 'exact', head: true })
+          .or(`referrer_user_id.eq.${userId},referral_code.eq.${code}`);
+        setReferralCount(count || 0);
+      } catch (refErr) {
+        console.warn('Error loading referral stats:', refErr);
       }
     } catch (err) {
       console.warn('Error loading staff shop:', err);
@@ -601,6 +641,34 @@ export default function StaffApp() {
         </View>
       )}
 
+      {/* Staff Barber Personal Referral Code Banner */}
+      <View style={styles.referralBanner}>
+        <View style={styles.referralLeft}>
+          <Text style={styles.referralBannerTag}>🎁 YOUR BARBER REFERRAL CODE</Text>
+          <View style={styles.referralCodeRow}>
+            <Text style={styles.referralCodeText}>{staffReferralCode}</Text>
+            <TouchableOpacity
+              style={styles.copyBtn}
+              onPress={() => {
+                Alert.alert(
+                  'Your Referral Code',
+                  `Share your code with customers:\n\n${staffReferralCode}\n\nCustomers enter this code when creating their account in the Customer App to link with you.`
+                );
+              }}
+            >
+              <Text style={styles.copyBtnText}>📋 Share / Copy</Text>
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.referralSubtext}>
+            Give this code to new customers upon arrival to attribute their registration.
+          </Text>
+        </View>
+        <View style={styles.referralMetric}>
+          <Text style={styles.referralMetricCount}>{referralCount}</Text>
+          <Text style={styles.referralMetricLabel}>Referred</Text>
+        </View>
+      </View>
+
       {/* Fast Action Quick Bar */}
       <View style={styles.quickBar}>
         <TouchableOpacity
@@ -783,6 +851,81 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     fontSize: 12,
     letterSpacing: 1
+  },
+  referralBanner: {
+    backgroundColor: '#0F172A',
+    borderBottomWidth: 1,
+    borderBottomColor: '#1E293B',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderLeftWidth: 4,
+    borderLeftColor: '#38BDF8'
+  },
+  referralLeft: {
+    flex: 1,
+    marginRight: 12
+  },
+  referralBannerTag: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#38BDF8',
+    letterSpacing: 0.5,
+    marginBottom: 4
+  },
+  referralCodeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10
+  },
+  referralCodeText: {
+    fontSize: 17,
+    fontWeight: '900',
+    color: '#F8FAFC',
+    letterSpacing: 1
+  },
+  copyBtn: {
+    backgroundColor: 'rgba(56, 189, 248, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(56, 189, 248, 0.4)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6
+  },
+  copyBtnText: {
+    color: '#38BDF8',
+    fontSize: 11,
+    fontWeight: '700'
+  },
+  referralSubtext: {
+    fontSize: 10,
+    color: '#64748B',
+    marginTop: 3,
+    lineHeight: 14
+  },
+  referralMetric: {
+    backgroundColor: '#1E293B',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#334155',
+    minWidth: 70
+  },
+  referralMetricCount: {
+    fontSize: 18,
+    fontWeight: '900',
+    color: '#F59E0B'
+  },
+  referralMetricLabel: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#94A3B8',
+    textTransform: 'uppercase',
+    marginTop: 1
   },
   quickBar: {
     flexDirection: 'row',

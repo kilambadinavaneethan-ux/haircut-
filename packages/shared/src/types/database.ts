@@ -10,6 +10,9 @@ export interface Database {
           full_name: string;
           phone: string | null;
           avatar_url: string | null;
+          referral_code?: string | null;
+          referred_by_code?: string | null;
+          referred_by_id?: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -19,6 +22,9 @@ export interface Database {
           full_name: string;
           phone?: string | null;
           avatar_url?: string | null;
+          referral_code?: string | null;
+          referred_by_code?: string | null;
+          referred_by_id?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -28,6 +34,9 @@ export interface Database {
           full_name?: string;
           phone?: string | null;
           avatar_url?: string | null;
+          referral_code?: string | null;
+          referred_by_code?: string | null;
+          referred_by_id?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -46,6 +55,7 @@ export interface Database {
           timezone?: string;
           opening_time: string;
           closing_time: string;
+          referral_code?: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -62,6 +72,7 @@ export interface Database {
           timezone?: string;
           opening_time?: string;
           closing_time?: string;
+          referral_code?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -78,6 +89,7 @@ export interface Database {
           timezone?: string;
           opening_time?: string;
           closing_time?: string;
+          referral_code?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -112,6 +124,7 @@ export interface Database {
           user_id: string | null;
           name: string;
           is_active: boolean;
+          referral_code?: string | null;
           created_at: string;
         };
         Insert: {
@@ -120,6 +133,7 @@ export interface Database {
           user_id?: string | null;
           name: string;
           is_active?: boolean;
+          referral_code?: string | null;
           created_at?: string;
         };
         Update: {
@@ -128,6 +142,42 @@ export interface Database {
           user_id?: string | null;
           name?: string;
           is_active?: boolean;
+          referral_code?: string | null;
+          created_at?: string;
+        };
+      };
+      referrals: {
+        Row: {
+          id: string;
+          referral_code: string;
+          referrer_type: 'staff' | 'barber' | 'owner' | 'shop' | 'customer';
+          referrer_user_id: string | null;
+          barber_id: string | null;
+          shop_id: string | null;
+          customer_id: string | null;
+          customer_name: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          referral_code: string;
+          referrer_type: 'staff' | 'barber' | 'owner' | 'shop' | 'customer';
+          referrer_user_id?: string | null;
+          barber_id?: string | null;
+          shop_id?: string | null;
+          customer_id?: string | null;
+          customer_name?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          referral_code?: string;
+          referrer_type?: 'staff' | 'barber' | 'owner' | 'shop' | 'customer';
+          referrer_user_id?: string | null;
+          barber_id?: string | null;
+          shop_id?: string | null;
+          customer_id?: string | null;
+          customer_name?: string | null;
           created_at?: string;
         };
       };

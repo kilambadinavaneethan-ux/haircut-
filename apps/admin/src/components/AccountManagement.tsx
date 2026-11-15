@@ -266,6 +266,16 @@ export default function AccountManagement({
                               (Current Session)
                             </span>
                           )}
+                          {p.referral_code && (
+                            <div style={{ fontSize: 11, color: '#F59E0B', fontWeight: 700, marginTop: 2 }}>
+                              🎁 Code: {p.referral_code}
+                            </div>
+                          )}
+                          {p.referred_by_code && (
+                            <div style={{ fontSize: 11, color: '#10B981', fontWeight: 600, marginTop: 2 }}>
+                              ✓ Referred by: {p.referred_by_code}
+                            </div>
+                          )}
                         </div>
                       </div>
                     </td>

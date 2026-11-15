@@ -11,6 +11,19 @@ export type Payment = Database['public']['Tables']['payments']['Row'];
 export type Notification = Database['public']['Tables']['notifications']['Row'];
 export type SupportTicket = Database['public']['Tables']['support_tickets']['Row'];
 export type AuditLog = Database['public']['Tables']['audit_logs']['Row'];
+export type Referral = Database['public']['Tables']['referrals']['Row'];
+
+export interface ReferralValidationResult {
+  valid: boolean;
+  referrer_type?: 'staff' | 'barber' | 'owner' | 'shop' | 'customer';
+  referrer_name?: string;
+  shop_name?: string;
+  shop_id?: string;
+  barber_id?: string;
+  referrer_user_id?: string;
+  referral_code?: string;
+  message?: string;
+}
 
 // Extended interfaces with joins for frontend views
 export interface QueueEntryWithDetails extends QueueEntry {
