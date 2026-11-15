@@ -142,7 +142,7 @@ export default function AdminMobileApp() {
         .select('*')
         .order('created_at', { ascending: false });
 
-      if (!shopErr && dbShops && dbShops.length > 0) {
+      if (!shopErr && dbShops) {
         setShops(dbShops as Shop[]);
       }
 
@@ -200,7 +200,6 @@ export default function AdminMobileApp() {
     setLoggingIn(true);
     try {
       if (isSignUp) {
-        // Sign Up New Admin Account
         if (!signUpFullName.trim()) {
           setAuthError('Please enter your full name.');
           setLoggingIn(false);
@@ -229,7 +228,6 @@ export default function AdminMobileApp() {
 
         const userId = data.user?.id || data.session?.user?.id;
         if (userId) {
-          // Guarantee profile row is set to 'admin'
           await (supabase.from('profiles') as any).upsert({
             id: userId,
             role: 'admin',
@@ -238,7 +236,6 @@ export default function AdminMobileApp() {
             updated_at: new Date().toISOString()
           });
 
-          // Attempt immediate session sign-in if needed
           if (!data.session?.user) {
             const { data: signInRes } = await supabase.auth.signInWithPassword({
               email: loginEmail.trim(),
@@ -261,12 +258,10 @@ export default function AdminMobileApp() {
             return;
           }
 
-          // If confirmation required
           setIsSignUp(false);
           setAuthSuccess('Admin account created! Please sign in with your credentials.');
         }
       } else {
-        // Sign In Existing Admin Account
         const { data, error } = await supabase.auth.signInWithPassword({
           email: loginEmail.trim(),
           password: loginPassword
@@ -405,7 +400,6 @@ export default function AdminMobileApp() {
 
     setCreatingAccount(true);
     try {
-      // 1. Sign up user via Supabase
       const { data, error } = await supabase.auth.signUp({
         email: newAccEmail.trim(),
         password: newAccPassword,
@@ -422,7 +416,6 @@ export default function AdminMobileApp() {
 
       const createdUserId = data.user?.id || data.session?.user?.id;
       if (createdUserId) {
-        // 2. Ensure profile has chosen role
         const newProfile: Profile = {
           id: createdUserId,
           role: newAccRole,
@@ -435,7 +428,6 @@ export default function AdminMobileApp() {
 
         await (supabase.from('profiles') as any).upsert(newProfile);
 
-        // 3. Log audit event
         await (supabase.from('audit_logs') as any).insert({
           user_id: adminUser?.id,
           action: 'ACCOUNT_PROVISIONED_BY_ADMIN',
@@ -508,9 +500,20 @@ export default function AdminMobileApp() {
     }
   };
 
-  // Metrics calculations
+  // ==========================================
+  // METRICS & COUNTERS (Explicitly computed)
+  // ==========================================
+  const totalShopsCount = shops.length;
   const pendingCount = shops.filter((s) => s.status === 'pending').length;
   const approvedCount = shops.filter((s) => s.status === 'approved').length;
+  const suspendedCount = shops.filter((s) => s.status === 'suspended').length;
+
+  // Breakdown of user counts by role
+  const customerCount = profiles.filter((p) => p.role === 'customer').length;
+  const ownerCount = profiles.filter((p) => p.role === 'owner').length;
+  const staffCount = profiles.filter((p) => p.role === 'staff').length;
+  const adminCount = profiles.filter((p) => p.role === 'admin').length;
+
   const activeQueuesCount = queueEntries.filter(
     (q) => q.status === 'waiting' || q.status === 'in_service'
   ).length;
@@ -696,7 +699,6 @@ export default function AdminMobileApp() {
               )}
             </TouchableOpacity>
 
-            {/* Quick Seed Button */}
             <TouchableOpacity style={styles.seedButton} onPress={fillSeedAdmin}>
               <Text style={styles.seedButtonText}>⚡ Autofill Seed Admin (admin@quickcut.com)</Text>
             </TouchableOpacity>
@@ -715,13 +717,6 @@ export default function AdminMobileApp() {
                   : 'Need to create an administrator account? Sign Up'}
               </Text>
             </TouchableOpacity>
-          </View>
-
-          <View style={styles.zeroFeeBadge}>
-            <Text style={styles.zeroFeeTitle}>🛡️ Strict ₹0 Platform Fee Policy</Text>
-            <Text style={styles.zeroFeeSubtitle}>
-              All platform commission models are cryptographically locked to ₹0.00. 100% of haircut revenue goes to barbershops.
-            </Text>
           </View>
         </ScrollView>
       </SafeAreaView>
@@ -746,6 +741,35 @@ export default function AdminMobileApp() {
         </TouchableOpacity>
       </View>
 
+      {/* PROMINENT LIVE PLATFORM COUNTERS BAR */}
+      <View style={styles.pulseBar}>
+        <View style={styles.pulseItem}>
+          <Text style={styles.pulseNumber}>{totalShopsCount}</Text>
+          <Text style={styles.pulseLabel}>🏬 Shops</Text>
+        </View>
+
+        <View style={styles.pulseDivider} />
+
+        <View style={styles.pulseItem}>
+          <Text style={[styles.pulseNumber, { color: '#10B981' }]}>{customerCount}</Text>
+          <Text style={styles.pulseLabel}>👥 Customers</Text>
+        </View>
+
+        <View style={styles.pulseDivider} />
+
+        <View style={styles.pulseItem}>
+          <Text style={[styles.pulseNumber, { color: '#60A5FA' }]}>{ownerCount}</Text>
+          <Text style={styles.pulseLabel}>🏪 Owners</Text>
+        </View>
+
+        <View style={styles.pulseDivider} />
+
+        <View style={styles.pulseItem}>
+          <Text style={[styles.pulseNumber, { color: '#F59E0B' }]}>{activeQueuesCount}</Text>
+          <Text style={styles.pulseLabel}>💈 In Queue</Text>
+        </View>
+      </View>
+
       {/* Navigation Sub-Tabs */}
       <View style={styles.tabBar}>
         <TouchableOpacity
@@ -753,7 +777,7 @@ export default function AdminMobileApp() {
           onPress={() => setActiveTab('shops')}
         >
           <Text style={[styles.tabItemText, activeTab === 'shops' && styles.tabItemTextActive]}>
-            💈 Shops {pendingCount > 0 && `(${pendingCount})`}
+            💈 Shops ({totalShopsCount})
           </Text>
         </TouchableOpacity>
 
@@ -762,7 +786,7 @@ export default function AdminMobileApp() {
           onPress={() => setActiveTab('accounts')}
         >
           <Text style={[styles.tabItemText, activeTab === 'accounts' && styles.tabItemTextActive]}>
-            👥 Accounts ({profiles.length})
+            👥 Customers ({customerCount})
           </Text>
         </TouchableOpacity>
 
@@ -805,6 +829,19 @@ export default function AdminMobileApp() {
         {/* ======================================= */}
         {activeTab === 'shops' && (
           <View>
+            {/* Stat Banner for Shops */}
+            <View style={styles.statBanner}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                <Text style={styles.statBannerTitle}>🏬 Total Barbershops: {totalShopsCount}</Text>
+                <View style={styles.statBannerBadge}>
+                  <Text style={styles.statBannerBadgeText}>{approvedCount} ACTIVE</Text>
+                </View>
+              </View>
+              <Text style={styles.statBannerSubtitle}>
+                {approvedCount} Live & Approved • {pendingCount} Pending Approval • {suspendedCount} Suspended
+              </Text>
+            </View>
+
             <View style={styles.searchBox}>
               <TextInput
                 style={styles.searchInput}
@@ -829,7 +866,10 @@ export default function AdminMobileApp() {
                     ]}
                   >
                     {filter.toUpperCase()}
-                    {filter === 'pending' && pendingCount > 0 ? ` (${pendingCount})` : ''}
+                    {filter === 'all' ? ` (${totalShopsCount})` : ''}
+                    {filter === 'pending' ? ` (${pendingCount})` : ''}
+                    {filter === 'approved' ? ` (${approvedCount})` : ''}
+                    {filter === 'suspended' ? ` (${suspendedCount})` : ''}
                   </Text>
                 </TouchableOpacity>
               ))}
@@ -929,16 +969,29 @@ export default function AdminMobileApp() {
         )}
 
         {/* ======================================= */}
-        {/* TAB 2: ACCOUNTS MANAGEMENT              */}
+        {/* TAB 2: ACCOUNTS & CUSTOMER DIRECTORY    */}
         {/* ======================================= */}
         {activeTab === 'accounts' && (
           <View>
+            {/* Stat Banner for Customers & Users */}
+            <View style={styles.statBanner}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                <Text style={styles.statBannerTitle}>👥 Total Customers: {customerCount}</Text>
+                <View style={[styles.statBannerBadge, { backgroundColor: 'rgba(16, 185, 129, 0.15)', borderColor: '#10B981' }]}>
+                  <Text style={[styles.statBannerBadgeText, { color: '#10B981' }]}>{profiles.length} TOTAL USERS</Text>
+                </View>
+              </View>
+              <Text style={styles.statBannerSubtitle}>
+                {customerCount} Customers • {ownerCount} Shop Owners • {staffCount} Staff Barbers • {adminCount} Admins
+              </Text>
+            </View>
+
             {/* Header with "+ Create Account" Button */}
             <View style={styles.sectionHeaderRow}>
               <View style={{ flex: 1 }}>
-                <Text style={styles.sectionHeading}>User Accounts</Text>
+                <Text style={styles.sectionHeading}>User Directory</Text>
                 <Text style={styles.sectionSubtitle}>
-                  Inspect and provision user accounts across all roles.
+                  View and manage customers, owners, and staff.
                 </Text>
               </View>
               <TouchableOpacity
@@ -961,7 +1014,7 @@ export default function AdminMobileApp() {
             </View>
 
             <View style={styles.filterRow}>
-              {(['all', 'admin', 'owner', 'staff', 'customer'] as const).map((r) => (
+              {(['all', 'customer', 'owner', 'staff', 'admin'] as const).map((r) => (
                 <TouchableOpacity
                   key={r}
                   style={[styles.filterChip, accountFilter === r && styles.filterChipActive]}
@@ -974,6 +1027,11 @@ export default function AdminMobileApp() {
                     ]}
                   >
                     {r.toUpperCase()}
+                    {r === 'all' ? ` (${profiles.length})` : ''}
+                    {r === 'customer' ? ` (${customerCount})` : ''}
+                    {r === 'owner' ? ` (${ownerCount})` : ''}
+                    {r === 'staff' ? ` (${staffCount})` : ''}
+                    {r === 'admin' ? ` (${adminCount})` : ''}
                   </Text>
                 </TouchableOpacity>
               ))}
@@ -1062,21 +1120,33 @@ export default function AdminMobileApp() {
           <View>
             <View style={styles.metricsGrid}>
               <View style={styles.metricCard}>
-                <Text style={styles.metricValue}>{shops.length}</Text>
+                <Text style={styles.metricValue}>{totalShopsCount}</Text>
                 <Text style={styles.metricLabel}>Total Barbershops</Text>
                 <Text style={styles.metricSub}>{approvedCount} Approved • {pendingCount} Pending</Text>
               </View>
 
+              <View style={[styles.metricCard, { borderColor: '#065F46' }]}>
+                <Text style={[styles.metricValue, { color: '#10B981' }]}>{customerCount}</Text>
+                <Text style={styles.metricLabel}>Total Customers</Text>
+                <Text style={styles.metricSub}>Registered customer profiles</Text>
+              </View>
+
               <View style={styles.metricCard}>
-                <Text style={styles.metricValue}>{profiles.length}</Text>
-                <Text style={styles.metricLabel}>Platform Accounts</Text>
-                <Text style={styles.metricSub}>Admins, Owners, Staff, Customers</Text>
+                <Text style={[styles.metricValue, { color: '#60A5FA' }]}>{ownerCount}</Text>
+                <Text style={styles.metricLabel}>Shop Owners</Text>
+                <Text style={styles.metricSub}>Registered salon owners</Text>
+              </View>
+
+              <View style={styles.metricCard}>
+                <Text style={[styles.metricValue, { color: '#C084FC' }]}>{staffCount}</Text>
+                <Text style={styles.metricLabel}>Staff Barbers</Text>
+                <Text style={styles.metricSub}>Barbers & stylists</Text>
               </View>
 
               <View style={styles.metricCard}>
                 <Text style={styles.metricValue}>{activeQueuesCount}</Text>
-                <Text style={styles.metricLabel}>Active Customers</Text>
-                <Text style={styles.metricSub}>Waiting or in haircuts right now</Text>
+                <Text style={styles.metricLabel}>In Queue Right Now</Text>
+                <Text style={styles.metricSub}>Customers waiting in chairs</Text>
               </View>
 
               <View style={[styles.metricCard, styles.metricCardGreen]}>
@@ -1192,7 +1262,6 @@ export default function AdminMobileApp() {
               Create a new user account and assign its platform security role.
             </Text>
 
-            {/* Role Selector */}
             <Text style={styles.formLabel}>Select Account Role</Text>
             <View style={styles.roleSelectRow}>
               {(['staff', 'owner', 'admin', 'customer'] as const).map((r) => (
@@ -1504,25 +1573,6 @@ const styles = StyleSheet.create({
     color: '#94A3B8',
     fontSize: 12
   },
-  zeroFeeBadge: {
-    marginTop: 20,
-    backgroundColor: '#0F172A',
-    borderRadius: 12,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: '#1E293B'
-  },
-  zeroFeeTitle: {
-    color: '#10B981',
-    fontWeight: '700',
-    fontSize: 13,
-    marginBottom: 4
-  },
-  zeroFeeSubtitle: {
-    color: '#64748B',
-    fontSize: 11,
-    lineHeight: 15
-  },
 
   // Main Dashboard Styles
   mainContainer: {
@@ -1564,6 +1614,37 @@ const styles = StyleSheet.create({
     fontWeight: '600'
   },
 
+  // Prominent Platform Pulse Bar
+  pulseBar: {
+    flexDirection: 'row',
+    backgroundColor: '#0A0F1D',
+    borderBottomWidth: 1,
+    borderBottomColor: '#1E293B',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    justifyContent: 'space-around',
+    alignItems: 'center'
+  },
+  pulseItem: {
+    alignItems: 'center'
+  },
+  pulseNumber: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#F59E0B'
+  },
+  pulseLabel: {
+    fontSize: 10,
+    color: '#94A3B8',
+    marginTop: 2,
+    fontWeight: '600'
+  },
+  pulseDivider: {
+    width: 1,
+    height: 24,
+    backgroundColor: '#1E293B'
+  },
+
   // Tab Bar
   tabBar: {
     flexDirection: 'row',
@@ -1592,6 +1673,40 @@ const styles = StyleSheet.create({
   scrollBody: {
     padding: 16,
     paddingBottom: 40
+  },
+
+  // Stat Banner
+  statBanner: {
+    backgroundColor: '#111827',
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: '#1F2937'
+  },
+  statBannerTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#F8FAFC'
+  },
+  statBannerSubtitle: {
+    fontSize: 11,
+    color: '#94A3B8',
+    marginTop: 4,
+    lineHeight: 16
+  },
+  statBannerBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    backgroundColor: 'rgba(245, 158, 11, 0.15)',
+    borderWidth: 1,
+    borderColor: '#F59E0B'
+  },
+  statBannerBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#F59E0B'
   },
 
   // Section Header Row

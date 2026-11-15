@@ -117,11 +117,18 @@ export default function PlatformActivity({
       </div>
 
       {/* Mini Stats Bar */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 24 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16, marginBottom: 24 }}>
         <div className="glass-panel" style={{ padding: 18 }}>
-          <p style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)' }}>APPROVED / ACTIVE SHOPS</p>
+          <p style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)' }}>TOTAL BARBERSHOPS</p>
           <p style={{ fontSize: 24, fontWeight: 900, color: '#FFFFFF', marginTop: 4 }}>
-            {activeShopsCount} <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>/ {shops.length} total</span>
+            {shops.length} <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>({activeShopsCount} active)</span>
+          </p>
+        </div>
+
+        <div className="glass-panel" style={{ padding: 18 }}>
+          <p style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)' }}>REGISTERED CUSTOMERS</p>
+          <p style={{ fontSize: 24, fontWeight: 900, color: 'var(--accent-green)', marginTop: 4 }}>
+            {profiles.filter((p) => p.role === 'customer').length}
           </p>
         </div>
 
@@ -133,8 +140,8 @@ export default function PlatformActivity({
         </div>
 
         <div className="glass-panel" style={{ padding: 18 }}>
-          <p style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)' }}>COMPLETED CUTS TODAY</p>
-          <p style={{ fontSize: 24, fontWeight: 900, color: 'var(--accent-green)', marginTop: 4 }}>
+          <p style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)' }}>COMPLETED CUTS</p>
+          <p style={{ fontSize: 24, fontWeight: 900, color: 'var(--accent-indigo)', marginTop: 4 }}>
             {completedEntries.length}
           </p>
         </div>

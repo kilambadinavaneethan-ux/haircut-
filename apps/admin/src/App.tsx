@@ -457,6 +457,7 @@ export default function AdminApp() {
   }
 
   // Aggregate Metrics for Top Bar
+  const customerCount = profiles.filter((p) => p.role === 'customer').length;
   const totalCompletedServices = queueEntries.filter((e) => e.status === 'completed').length;
   const activeQueueCount = queueEntries.filter((e) => e.status === 'waiting' || e.status === 'in_service').length;
   const pendingApprovals = shops.filter((s) => s.status === 'pending').length;
@@ -502,7 +503,7 @@ export default function AdminApp() {
               <span className="badge badge-admin">Master Console</span>
             </div>
             <p style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-              Logged in: <strong>{currentProfile.full_name}</strong> ({currentUser.email})
+              Logged in: <strong>{currentProfile.full_name}</strong> ({currentUser.email}) • <strong>{shops.length} Shops</strong> • <strong>{customerCount} Customers</strong>
             </p>
           </div>
         </div>
@@ -510,8 +511,8 @@ export default function AdminApp() {
         {/* Center Nav Tabs */}
         <nav style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {[
-            { id: 'shops', label: `Shops (${pendingApprovals > 0 ? `${pendingApprovals} pending` : shops.length})` },
-            { id: 'accounts', label: `Accounts (${profiles.length})` },
+            { id: 'shops', label: `Shops (${shops.length}${pendingApprovals > 0 ? ` · ${pendingApprovals} pending` : ''})` },
+            { id: 'accounts', label: `Customers (${customerCount}) / Accounts (${profiles.length})` },
             { id: 'activity', label: 'Live Traffic' },
             { id: 'fraud', label: 'Fraud Watch' },
             { id: 'tickets', label: `Support Tickets (${openTickets})` },

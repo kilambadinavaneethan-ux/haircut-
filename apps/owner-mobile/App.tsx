@@ -9,7 +9,8 @@ import {
   ActivityIndicator,
   RefreshControl,
   Alert,
-  Modal
+  Modal,
+  Platform
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -20,8 +21,8 @@ import {
   getSupabaseClient
 } from '@quickcut/shared';
 
-// Fallback seed shop for Alex Rivera
-const SEED_OWNER_SHOP: Shop = {
+// Seed shop for Alex Rivera (only used if logging in as demo seed owner and offline)
+const SEED_ALEX_SHOP: Shop = {
   id: '10000000-0000-0000-0000-000000000001',
   owner_id: '00000000-0000-0000-0000-000000000002',
   name: 'Crown & Blade Barbershop',
@@ -41,37 +42,47 @@ export default function OwnerMobileApp() {
   const [ownerUser, setOwnerUser] = useState<{ id: string; email: string; name: string } | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
 
-  // Auth form
+  // Auth form state (Supports Sign In & Sign Up with Shop Creation)
   const [isSignUp, setIsSignUp] = useState(false);
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [authFullName, setAuthFullName] = useState('');
   const [authPhone, setAuthPhone] = useState('');
+
+  // New Shop Details (for sign-up onboarding)
+  const [signupShopName, setSignupShopName] = useState('');
+  const [signupShopAddress, setSignupShopAddress] = useState('');
+  const [signupShopPhone, setSignupShopPhone] = useState('');
+  const [signupOpeningTime, setSignupOpeningTime] = useState('09:00:00');
+  const [signupClosingTime, setSignupClosingTime] = useState('21:00:00');
+
   const [loggingIn, setLoggingIn] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
 
-  // Shop state
-  const [shops, setShops] = useState<Shop[]>([SEED_OWNER_SHOP]);
-  const [activeShopId, setActiveShopId] = useState<string>(SEED_OWNER_SHOP.id);
+  // Isolated Shop State (Only shops owned by this user)
+  const [shops, setShops] = useState<Shop[]>([]);
+  const [activeShopId, setActiveShopId] = useState<string>('');
   const [services, setServices] = useState<Service[]>([]);
   const [queueEntries, setQueueEntries] = useState<QueueEntryWithDetails[]>([]);
-  const [activeTab, setActiveTab] = useState<'queue' | 'earnings' | 'services' | 'staff'>('queue');
+  const [activeTab, setActiveTab] = useState<'queue' | 'earnings' | 'services'>('queue');
   const [loadingData, setLoadingData] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
-  // Modals
+  // Standalone Shop Registration Modal
   const [registerModalVisible, setRegisterModalVisible] = useState(false);
-  const [newShopName, setNewShopName] = useState('');
-  const [newShopAddress, setNewShopAddress] = useState('');
-  const [newShopPhone, setNewShopPhone] = useState('');
+  const [regShopName, setRegShopName] = useState('');
+  const [regShopAddress, setRegShopAddress] = useState('');
+  const [regShopPhone, setRegShopPhone] = useState('');
+  const [registeringShop, setRegisteringShop] = useState(false);
 
+  // Service Creation Modal
   const [addServiceModalVisible, setAddServiceModalVisible] = useState(false);
   const [newServiceName, setNewServiceName] = useState('');
   const [newServicePrice, setNewServicePrice] = useState('250');
   const [newServiceDuration, setNewServiceDuration] = useState('25');
 
   const supabase = getSupabaseClient();
-  const activeShop = shops.find((s) => s.id === activeShopId) || shops[0] || SEED_OWNER_SHOP;
+  const activeShop = shops.find((s) => s.id === activeShopId) || shops[0] || null;
 
   // 1. Initial Session Check
   useEffect(() => {
@@ -103,48 +114,56 @@ export default function OwnerMobileApp() {
     }
   };
 
-  // 2. Load Owner Shops & Data
+  // 2. Load Owner's Separate Shops (owner_id = ownerUser.id)
   const loadOwnerData = useCallback(async () => {
     if (!ownerUser) return;
     setLoadingData(true);
     try {
-      // 1. Load Shops belonging to this owner
+      // Load shops belonging strictly to this owner
       const { data: dbShops, error: shopsErr } = await supabase
         .from('shops')
         .select('*')
         .eq('owner_id', ownerUser.id)
-        .order('name');
-
-      const loadedShops = (dbShops as unknown as Shop[]) || [];
-      if (!shopsErr && loadedShops.length > 0) {
-        setShops(loadedShops);
-        if (!activeShopId || !loadedShops.find((s: Shop) => s.id === activeShopId)) {
-          setActiveShopId(loadedShops[0].id);
-        }
-      }
-
-      const currentShopId = activeShopId || loadedShops[0]?.id || SEED_OWNER_SHOP.id;
-
-      // 2. Load Services for active shop
-      const { data: dbServices } = await supabase
-        .from('services')
-        .select('*')
-        .eq('shop_id', currentShopId)
-        .order('name');
-
-      if (dbServices) {
-        setServices(dbServices as Service[]);
-      }
-
-      // 3. Load Queue Entries for active shop
-      const { data: dbQueue } = await supabase
-        .from('queue_entries')
-        .select('*, service:services(*), customer:profiles!queue_entries_customer_id_fkey(*)')
-        .eq('shop_id', currentShopId)
         .order('created_at', { ascending: false });
 
-      if (dbQueue) {
-        setQueueEntries(dbQueue as QueueEntryWithDetails[]);
+      const loadedShops = (dbShops as unknown as Shop[]) || [];
+
+      // If Alex Rivera seed demo and offline, provide seed shop
+      if (loadedShops.length === 0 && ownerUser.email === 'owner.alex@quickcut.com') {
+        setShops([SEED_ALEX_SHOP]);
+        setActiveShopId(SEED_ALEX_SHOP.id);
+        return;
+      }
+
+      setShops(loadedShops);
+
+      const targetId = activeShopId && loadedShops.some((s) => s.id === activeShopId)
+        ? activeShopId
+        : loadedShops[0]?.id || '';
+
+      setActiveShopId(targetId);
+
+      if (targetId) {
+        // Load services for this shop
+        const { data: dbServices } = await supabase
+          .from('services')
+          .select('*')
+          .eq('shop_id', targetId)
+          .order('name');
+
+        if (dbServices) setServices(dbServices as Service[]);
+
+        // Load queue entries for this shop
+        const { data: dbQueue } = await supabase
+          .from('queue_entries')
+          .select('*, service:services(*), customer:profiles!queue_entries_customer_id_fkey(*)')
+          .eq('shop_id', targetId)
+          .order('created_at', { ascending: false });
+
+        if (dbQueue) setQueueEntries(dbQueue as QueueEntryWithDetails[]);
+      } else {
+        setServices([]);
+        setQueueEntries([]);
       }
     } catch {
       // Offline fallback
@@ -165,7 +184,7 @@ export default function OwnerMobileApp() {
     loadOwnerData();
   };
 
-  // 3. Auth Actions
+  // 3. Auth Submission (Sign In & Sign Up with Shop Creation)
   const handleAuthSubmit = async () => {
     if (!authEmail.trim() || !authPassword.trim()) {
       setAuthError('Please fill in both email and password.');
@@ -176,12 +195,32 @@ export default function OwnerMobileApp() {
     setAuthError(null);
     try {
       if (isSignUp) {
+        // Validate Owner & Shop details
         if (!authFullName.trim()) {
           setAuthError('Please enter your full name.');
           setLoggingIn(false);
           return;
         }
 
+        if (!signupShopName.trim()) {
+          setAuthError('Please enter your barbershop name.');
+          setLoggingIn(false);
+          return;
+        }
+
+        if (!signupShopAddress.trim()) {
+          setAuthError('Please enter your barbershop address.');
+          setLoggingIn(false);
+          return;
+        }
+
+        if (authPassword.length < 6) {
+          setAuthError('Password must be at least 6 characters.');
+          setLoggingIn(false);
+          return;
+        }
+
+        // 1. Register Owner via Supabase Auth
         const { data, error } = await supabase.auth.signUp({
           email: authEmail.trim(),
           password: authPassword,
@@ -195,14 +234,72 @@ export default function OwnerMobileApp() {
         });
 
         if (error) throw error;
-        if (data.user) {
-          setOwnerUser({
-            id: data.user.id,
-            email: data.user.email || '',
-            name: authFullName.trim()
-          });
+
+        const userId = data.user?.id || data.session?.user?.id;
+        if (!userId) {
+          throw new Error('Registration failed. Please try again.');
         }
+
+        // 2. Guarantee Owner Profile row
+        await (supabase.from('profiles') as any).upsert({
+          id: userId,
+          role: 'owner',
+          full_name: authFullName.trim(),
+          phone: authPhone.trim() || null,
+          updated_at: new Date().toISOString()
+        });
+
+        // 3. Create Separate Shop for this Owner
+        const { data: createdShop, error: shopErr } = await (supabase.from('shops') as any).insert({
+          owner_id: userId,
+          name: signupShopName.trim(),
+          address: signupShopAddress.trim(),
+          phone: signupShopPhone.trim() || authPhone.trim() || null,
+          status: 'pending', // Pending admin approval
+          is_queue_paused: false,
+          opening_time: signupOpeningTime || '09:00:00',
+          closing_time: signupClosingTime || '21:00:00'
+        }).select().single();
+
+        if (shopErr) throw shopErr;
+
+        // 4. Seed 3 default starter services for this shop
+        if (createdShop?.id) {
+          try {
+            await (supabase.from('services') as any).insert([
+              { shop_id: createdShop.id, name: 'Classic Haircut', price: 250, avg_minutes: 25, is_active: true },
+              { shop_id: createdShop.id, name: 'Beard Trim & Shape', price: 150, avg_minutes: 15, is_active: true },
+              { shop_id: createdShop.id, name: 'Hair & Beard Combo', price: 350, avg_minutes: 35, is_active: true }
+            ]);
+          } catch {
+            // Non-critical if services fail
+          }
+        }
+
+        // 5. Establish Session
+        const { data: signInRes } = await supabase.auth.signInWithPassword({
+          email: authEmail.trim(),
+          password: authPassword
+        });
+
+        const activeUserId = signInRes?.user?.id || userId;
+        setOwnerUser({
+          id: activeUserId,
+          email: authEmail.trim(),
+          name: authFullName.trim()
+        });
+
+        if (createdShop) {
+          setShops([createdShop as Shop]);
+          setActiveShopId(createdShop.id);
+        }
+
+        Alert.alert(
+          'Account & Shop Created!',
+          `Welcome, ${authFullName.trim()}! Your shop "${signupShopName.trim()}" has been registered and submitted for admin approval.`
+        );
       } else {
+        // Sign In Existing Owner
         const { data, error } = await supabase.auth.signInWithPassword({
           email: authEmail.trim(),
           password: authPassword
@@ -238,10 +335,13 @@ export default function OwnerMobileApp() {
   const handleSignOut = async () => {
     await supabase.auth.signOut();
     setOwnerUser(null);
+    setShops([]);
+    setActiveShopId('');
   };
 
   // 4. Shop Management Actions
   const handleToggleQueuePause = async () => {
+    if (!activeShop) return;
     const nextState = !activeShop.is_queue_paused;
     try {
       const { error } = await (supabase.from('shops') as any)
@@ -262,18 +362,20 @@ export default function OwnerMobileApp() {
     }
   };
 
-  const handleRegisterShop = async () => {
-    if (!newShopName.trim() || !newShopAddress.trim()) {
+  // Register additional shop for this owner
+  const handleRegisterAdditionalShop = async () => {
+    if (!regShopName.trim() || !regShopAddress.trim()) {
       Alert.alert('Required Fields', 'Please provide both shop name and address.');
       return;
     }
 
+    setRegisteringShop(true);
     try {
       const { data, error } = await (supabase.from('shops') as any).insert({
         owner_id: ownerUser?.id,
-        name: newShopName.trim(),
-        address: newShopAddress.trim(),
-        phone: newShopPhone.trim() || null,
+        name: regShopName.trim(),
+        address: regShopAddress.trim(),
+        phone: regShopPhone.trim() || null,
         status: 'pending',
         is_queue_paused: false,
         opening_time: '09:00:00',
@@ -283,20 +385,29 @@ export default function OwnerMobileApp() {
       if (error) throw error;
 
       if (data) {
+        // Add starter services
+        await (supabase.from('services') as any).insert([
+          { shop_id: data.id, name: 'Classic Haircut', price: 250, avg_minutes: 25, is_active: true },
+          { shop_id: data.id, name: 'Beard Trim & Shape', price: 150, avg_minutes: 15, is_active: true }
+        ]);
+
         setShops((prev) => [data as Shop, ...prev]);
         setActiveShopId(data.id);
       }
       setRegisterModalVisible(false);
-      setNewShopName('');
-      setNewShopAddress('');
-      setNewShopPhone('');
-      Alert.alert('Shop Submitted', 'Your barbershop was submitted for admin approval!');
+      setRegShopName('');
+      setRegShopAddress('');
+      setRegShopPhone('');
+      Alert.alert('Shop Submitted', `"${regShopName.trim()}" has been submitted for admin approval!`);
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Failed to register shop.');
+    } finally {
+      setRegisteringShop(false);
     }
   };
 
   const handleAddService = async () => {
+    if (!activeShop) return;
     if (!newServiceName.trim()) {
       Alert.alert('Error', 'Please enter service name.');
       return;
@@ -348,7 +459,7 @@ export default function OwnerMobileApp() {
   }, [completedEntries]);
 
   // ==========================================
-  // RENDER: Loading
+  // RENDER: Loading State
   // ==========================================
   if (authLoading) {
     return (
@@ -361,7 +472,7 @@ export default function OwnerMobileApp() {
   }
 
   // ==========================================
-  // RENDER: Owner Auth Screen
+  // RENDER: Owner Auth Screen (Separate Account & Separate Shop)
   // ==========================================
   if (!ownerUser) {
     return (
@@ -377,13 +488,40 @@ export default function OwnerMobileApp() {
           </View>
 
           <View style={styles.authCard}>
+            {/* Mode Switcher */}
+            <View style={styles.modeToggleRow}>
+              <TouchableOpacity
+                style={[styles.modeTab, !isSignUp && styles.modeTabActive]}
+                onPress={() => {
+                  setIsSignUp(false);
+                  setAuthError(null);
+                }}
+              >
+                <Text style={[styles.modeTabText, !isSignUp && styles.modeTabTextActive]}>
+                  Sign In
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.modeTab, isSignUp && styles.modeTabActive]}
+                onPress={() => {
+                  setIsSignUp(true);
+                  setAuthError(null);
+                }}
+              >
+                <Text style={[styles.modeTabText, isSignUp && styles.modeTabTextActive]}>
+                  Create Account & Shop
+                </Text>
+              </TouchableOpacity>
+            </View>
+
             <Text style={styles.cardHeader}>
-              {isSignUp ? 'Register Owner Account' : 'Shop Owner Sign In'}
+              {isSignUp ? 'Register Owner & Barbershop' : 'Shop Owner Sign In'}
             </Text>
             <Text style={styles.cardInfo}>
               {isSignUp
-                ? 'Create a shop owner account to list your barbershop, manage queues, and track 100% of your earnings.'
-                : 'Sign in to monitor live customer queues, manage haircuts & pricing, and view daily earnings.'}
+                ? 'Create your dedicated owner account and list your separate barbershop to start managing queues.'
+                : 'Sign in to monitor your live customer queue, manage haircut pricing, and view daily earnings.'}
             </Text>
 
             {authError && (
@@ -392,13 +530,16 @@ export default function OwnerMobileApp() {
               </View>
             )}
 
+            {/* SECTION 1: OWNER CREDENTIALS */}
+            <Text style={styles.sectionDivider}>1. OWNER ACCOUNT DETAILS</Text>
+
             {isSignUp && (
               <>
                 <View style={styles.formGroup}>
-                  <Text style={styles.formLabel}>Full Name</Text>
+                  <Text style={styles.formLabel}>Owner Full Name</Text>
                   <TextInput
                     style={styles.formInput}
-                    placeholder="Alex Rivera"
+                    placeholder="Vikram Malhotra"
                     placeholderTextColor="#64748B"
                     value={authFullName}
                     onChangeText={setAuthFullName}
@@ -409,7 +550,7 @@ export default function OwnerMobileApp() {
                   <Text style={styles.formLabel}>Phone Number</Text>
                   <TextInput
                     style={styles.formInput}
-                    placeholder="+91 98888 22222"
+                    placeholder="+91 98765 12345"
                     placeholderTextColor="#64748B"
                     value={authPhone}
                     onChangeText={setAuthPhone}
@@ -444,6 +585,49 @@ export default function OwnerMobileApp() {
               />
             </View>
 
+            {/* SECTION 2: SEPARATE SHOP DETAILS (SIGNUP ONLY) */}
+            {isSignUp && (
+              <>
+                <Text style={[styles.sectionDivider, { marginTop: 14 }]}>
+                  2. YOUR SEPARATE BARBERSHOP
+                </Text>
+
+                <View style={styles.formGroup}>
+                  <Text style={styles.formLabel}>Barbershop Name</Text>
+                  <TextInput
+                    style={styles.formInput}
+                    placeholder="e.g. Malhotra Fades & Shaves"
+                    placeholderTextColor="#64748B"
+                    value={signupShopName}
+                    onChangeText={setSignupShopName}
+                  />
+                </View>
+
+                <View style={styles.formGroup}>
+                  <Text style={styles.formLabel}>Shop Address</Text>
+                  <TextInput
+                    style={styles.formInput}
+                    placeholder="e.g. Shop 4, 100ft Road, Indiranagar"
+                    placeholderTextColor="#64748B"
+                    value={signupShopAddress}
+                    onChangeText={setSignupShopAddress}
+                  />
+                </View>
+
+                <View style={styles.formGroup}>
+                  <Text style={styles.formLabel}>Shop Contact Phone (Optional)</Text>
+                  <TextInput
+                    style={styles.formInput}
+                    placeholder="+91 80 4111 2222"
+                    placeholderTextColor="#64748B"
+                    value={signupShopPhone}
+                    onChangeText={setSignupShopPhone}
+                    keyboardType="phone-pad"
+                  />
+                </View>
+              </>
+            )}
+
             <TouchableOpacity
               style={styles.submitBtn}
               onPress={handleAuthSubmit}
@@ -453,14 +637,16 @@ export default function OwnerMobileApp() {
                 <ActivityIndicator color="#FFFFFF" />
               ) : (
                 <Text style={styles.submitBtnText}>
-                  {isSignUp ? 'Create Owner Account' : 'Sign In as Owner'}
+                  {isSignUp ? 'Create Account & Register Shop' : 'Sign In as Owner'}
                 </Text>
               )}
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.seedButton} onPress={fillSeedOwner}>
-              <Text style={styles.seedButtonText}>⚡ Autofill Seed Owner (Alex Rivera)</Text>
-            </TouchableOpacity>
+            {!isSignUp && (
+              <TouchableOpacity style={styles.seedButton} onPress={fillSeedOwner}>
+                <Text style={styles.seedButtonText}>⚡ Autofill Demo Owner (Alex Rivera)</Text>
+              </TouchableOpacity>
+            )}
 
             <TouchableOpacity
               style={{ marginTop: 16, alignItems: 'center' }}
@@ -472,7 +658,7 @@ export default function OwnerMobileApp() {
               <Text style={styles.toggleAuthText}>
                 {isSignUp
                   ? 'Already have an owner account? Sign In'
-                  : "Don't have an owner account? Sign Up"}
+                  : 'New shop owner? Create Account & Shop'}
               </Text>
             </TouchableOpacity>
           </View>
@@ -482,7 +668,82 @@ export default function OwnerMobileApp() {
   }
 
   // ==========================================
-  // RENDER: Main Owner Dashboard
+  // RENDER: Case Where Owner Has No Shop Yet
+  // ==========================================
+  if (shops.length === 0 || !activeShop) {
+    return (
+      <SafeAreaView style={styles.mainContainer}>
+        <StatusBar style="light" />
+        <View style={styles.navbar}>
+          <Text style={styles.navLogo}>🏪 QuickCut Owner</Text>
+          <TouchableOpacity style={styles.signOutBtn} onPress={handleSignOut}>
+            <Text style={styles.signOutText}>Sign Out</Text>
+          </TouchableOpacity>
+        </View>
+
+        <ScrollView contentContainerStyle={styles.noShopContainer}>
+          <View style={styles.noShopCard}>
+            <Text style={{ fontSize: 44, marginBottom: 12 }}>💈</Text>
+            <Text style={styles.noShopTitle}>Welcome, {ownerUser.name}!</Text>
+            <Text style={styles.noShopSubtitle}>
+              You don&apos;t have a barbershop registered yet. Register your barbershop below to get your separate live queue and pricing menu.
+            </Text>
+
+            <View style={{ width: '100%', marginTop: 20 }}>
+              <View style={styles.formGroup}>
+                <Text style={styles.formLabel}>Barbershop Name</Text>
+                <TextInput
+                  style={styles.formInput}
+                  placeholder="e.g. Royal Cuts Lounge"
+                  placeholderTextColor="#64748B"
+                  value={regShopName}
+                  onChangeText={setRegShopName}
+                />
+              </View>
+
+              <View style={styles.formGroup}>
+                <Text style={styles.formLabel}>Shop Address</Text>
+                <TextInput
+                  style={styles.formInput}
+                  placeholder="e.g. 15 CMH Road, Bengaluru"
+                  placeholderTextColor="#64748B"
+                  value={regShopAddress}
+                  onChangeText={setRegShopAddress}
+                />
+              </View>
+
+              <View style={styles.formGroup}>
+                <Text style={styles.formLabel}>Shop Contact Phone</Text>
+                <TextInput
+                  style={styles.formInput}
+                  placeholder="+91 98765 43210"
+                  placeholderTextColor="#64748B"
+                  value={regShopPhone}
+                  onChangeText={setRegShopPhone}
+                  keyboardType="phone-pad"
+                />
+              </View>
+
+              <TouchableOpacity
+                style={styles.submitBtn}
+                onPress={handleRegisterAdditionalShop}
+                disabled={registeringShop}
+              >
+                {registeringShop ? (
+                  <ActivityIndicator color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.submitBtnText}>Register My Barbershop</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
+  // ==========================================
+  // RENDER: Main Owner Dashboard For Active Shop
   // ==========================================
   return (
     <SafeAreaView style={styles.mainContainer}>
@@ -493,16 +754,50 @@ export default function OwnerMobileApp() {
         <View style={{ flex: 1 }}>
           <Text style={styles.navLogo}>🏪 QuickCut Owner</Text>
           <Text style={styles.navUser}>
-            {ownerUser.name} • {activeShop.name}
+            {ownerUser.name} ({ownerUser.email})
           </Text>
         </View>
 
-        <TouchableOpacity style={styles.signOutBtn} onPress={handleSignOut}>
-          <Text style={styles.signOutText}>Sign Out</Text>
-        </TouchableOpacity>
+        <View style={{ flexDirection: 'row', gap: 8 }}>
+          <TouchableOpacity
+            style={styles.addShopBtn}
+            onPress={() => setRegisterModalVisible(true)}
+          >
+            <Text style={styles.addShopBtnText}>+ Shop</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.signOutBtn} onPress={handleSignOut}>
+            <Text style={styles.signOutText}>Sign Out</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
-      {/* Shop Info Card & Status */}
+      {/* Multi-Shop Selector Bar (If owner has multiple shops) */}
+      {shops.length > 1 && (
+        <ScrollView horizontal style={styles.shopSelectorBar} contentContainerStyle={{ paddingHorizontal: 16, gap: 8 }}>
+          {shops.map((s) => (
+            <TouchableOpacity
+              key={s.id}
+              style={[
+                styles.shopSelectChip,
+                s.id === activeShopId && styles.shopSelectChipActive
+              ]}
+              onPress={() => setActiveShopId(s.id)}
+            >
+              <Text
+                style={[
+                  styles.shopSelectText,
+                  s.id === activeShopId && styles.shopSelectTextActive
+                ]}
+              >
+                💈 {s.name}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      )}
+
+      {/* Active Shop Info & Status Bar */}
       <View style={styles.shopBar}>
         <View style={{ flex: 1 }}>
           <Text style={styles.shopBarName}>{activeShop.name}</Text>
@@ -526,7 +821,7 @@ export default function OwnerMobileApp() {
                 activeShop.status === 'suspended' && { color: '#EF4444' }
               ]}
             >
-              {activeShop.status.toUpperCase()}
+              {activeShop.status === 'pending' ? 'PENDING APPROVAL' : activeShop.status.toUpperCase()}
             </Text>
           </View>
 
@@ -761,6 +1056,72 @@ export default function OwnerMobileApp() {
           </View>
         </View>
       </Modal>
+
+      {/* Register Additional Shop Modal */}
+      <Modal visible={registerModalVisible} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Register Another Barbershop</Text>
+            <Text style={{ fontSize: 12, color: '#94A3B8', marginBottom: 16 }}>
+              Add a second salon or branch location to your owner account.
+            </Text>
+
+            <View style={styles.formGroup}>
+              <Text style={styles.formLabel}>Barbershop Name</Text>
+              <TextInput
+                style={styles.formInput}
+                placeholder="Crown & Blade - Indiranagar Branch"
+                placeholderTextColor="#64748B"
+                value={regShopName}
+                onChangeText={setRegShopName}
+              />
+            </View>
+
+            <View style={styles.formGroup}>
+              <Text style={styles.formLabel}>Shop Address</Text>
+              <TextInput
+                style={styles.formInput}
+                placeholder="100ft Road, Indiranagar"
+                placeholderTextColor="#64748B"
+                value={regShopAddress}
+                onChangeText={setRegShopAddress}
+              />
+            </View>
+
+            <View style={styles.formGroup}>
+              <Text style={styles.formLabel}>Phone Number</Text>
+              <TextInput
+                style={styles.formInput}
+                placeholder="+91 80 4999 8888"
+                placeholderTextColor="#64748B"
+                value={regShopPhone}
+                onChangeText={setRegShopPhone}
+                keyboardType="phone-pad"
+              />
+            </View>
+
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={styles.modalCancel}
+                onPress={() => setRegisterModalVisible(false)}
+              >
+                <Text style={styles.modalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.modalSave}
+                onPress={handleRegisterAdditionalShop}
+                disabled={registeringShop}
+              >
+                {registeringShop ? (
+                  <ActivityIndicator color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.modalSaveText}>Submit Shop</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -783,35 +1144,35 @@ const styles = StyleSheet.create({
     backgroundColor: '#090D16'
   },
   authScroll: {
-    padding: 24,
+    padding: 20,
     justifyContent: 'center'
   },
   authHeader: {
     alignItems: 'center',
-    marginTop: 20,
-    marginBottom: 28
+    marginTop: 16,
+    marginBottom: 20
   },
   ownerBadge: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
+    width: 68,
+    height: 68,
+    borderRadius: 34,
     backgroundColor: '#1E293B',
     borderWidth: 2,
     borderColor: '#3B82F6',
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 12
+    marginBottom: 10
   },
   ownerEmoji: {
-    fontSize: 34
+    fontSize: 32
   },
   authTitle: {
-    fontSize: 26,
+    fontSize: 24,
     fontWeight: '800',
     color: '#F8FAFC'
   },
   authSubtitle: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#94A3B8',
     marginTop: 4
   },
@@ -822,6 +1183,30 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#1F2937'
   },
+  modeToggleRow: {
+    flexDirection: 'row',
+    backgroundColor: '#1E293B',
+    borderRadius: 10,
+    padding: 4,
+    marginBottom: 14
+  },
+  modeTab: {
+    flex: 1,
+    paddingVertical: 8,
+    alignItems: 'center',
+    borderRadius: 8
+  },
+  modeTabActive: {
+    backgroundColor: '#3B82F6'
+  },
+  modeTabText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#94A3B8'
+  },
+  modeTabTextActive: {
+    color: '#FFFFFF'
+  },
   cardHeader: {
     fontSize: 18,
     fontWeight: '700',
@@ -829,38 +1214,46 @@ const styles = StyleSheet.create({
     marginBottom: 6
   },
   cardInfo: {
-    fontSize: 13,
+    fontSize: 12,
     color: '#94A3B8',
-    lineHeight: 18,
-    marginBottom: 18
+    lineHeight: 17,
+    marginBottom: 14
+  },
+  sectionDivider: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#60A5FA',
+    letterSpacing: 0.5,
+    marginBottom: 10,
+    marginTop: 4
   },
   errorAlert: {
     backgroundColor: '#450A0A',
     borderWidth: 1,
     borderColor: '#EF4444',
-    padding: 12,
+    padding: 10,
     borderRadius: 8,
-    marginBottom: 16
+    marginBottom: 14
   },
   errorAlertText: {
     color: '#FCA5A5',
-    fontSize: 13
+    fontSize: 12
   },
   formGroup: {
-    marginBottom: 16
+    marginBottom: 12
   },
   formLabel: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '600',
     color: '#CBD5E1',
-    marginBottom: 6
+    marginBottom: 5
   },
   formInput: {
     backgroundColor: '#1E293B',
     borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 15,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
     color: '#F8FAFC',
     borderWidth: 1,
     borderColor: '#334155'
@@ -868,32 +1261,61 @@ const styles = StyleSheet.create({
   submitBtn: {
     backgroundColor: '#3B82F6',
     borderRadius: 10,
-    paddingVertical: 14,
+    paddingVertical: 13,
     alignItems: 'center',
     marginTop: 8
   },
   submitBtnText: {
     color: '#FFFFFF',
     fontWeight: '700',
-    fontSize: 16
+    fontSize: 15
   },
   seedButton: {
     backgroundColor: '#1E293B',
     borderRadius: 10,
-    paddingVertical: 12,
+    paddingVertical: 10,
     alignItems: 'center',
-    marginTop: 12,
+    marginTop: 10,
     borderWidth: 1,
     borderColor: '#334155'
   },
   seedButtonText: {
     color: '#60A5FA',
     fontWeight: '600',
-    fontSize: 13
+    fontSize: 12
   },
   toggleAuthText: {
     color: '#94A3B8',
-    fontSize: 13
+    fontSize: 12
+  },
+
+  // No Shop Container
+  noShopContainer: {
+    padding: 24,
+    justifyContent: 'center',
+    alignItems: 'center'
+  },
+  noShopCard: {
+    width: '100%',
+    backgroundColor: '#111827',
+    borderRadius: 16,
+    padding: 24,
+    borderWidth: 1,
+    borderColor: '#1F2937',
+    alignItems: 'center'
+  },
+  noShopTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#F8FAFC',
+    textAlign: 'center'
+  },
+  noShopSubtitle: {
+    fontSize: 13,
+    color: '#94A3B8',
+    textAlign: 'center',
+    marginTop: 6,
+    lineHeight: 18
   },
 
   // Main Container
@@ -912,7 +1334,7 @@ const styles = StyleSheet.create({
     borderBottomColor: '#1F2937'
   },
   navLogo: {
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: '800',
     color: '#60A5FA'
   },
@@ -921,16 +1343,54 @@ const styles = StyleSheet.create({
     color: '#94A3B8',
     marginTop: 2
   },
+  addShopBtn: {
+    backgroundColor: '#3B82F6',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 6
+  },
+  addShopBtnText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 11
+  },
   signOutBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
     backgroundColor: '#1F2937',
     borderRadius: 6
   },
   signOutText: {
     color: '#EF4444',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '600'
+  },
+
+  shopSelectorBar: {
+    backgroundColor: '#0A0F1D',
+    borderBottomWidth: 1,
+    borderBottomColor: '#1E293B',
+    paddingVertical: 8
+  },
+  shopSelectChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    backgroundColor: '#111827',
+    borderWidth: 1,
+    borderColor: '#1F2937'
+  },
+  shopSelectChipActive: {
+    backgroundColor: 'rgba(59, 130, 246, 0.2)',
+    borderColor: '#3B82F6'
+  },
+  shopSelectText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#94A3B8'
+  },
+  shopSelectTextActive: {
+    color: '#60A5FA'
   },
 
   shopBar: {
@@ -967,7 +1427,7 @@ const styles = StyleSheet.create({
   statusPending: { backgroundColor: 'rgba(245, 158, 11, 0.15)' },
   statusSuspended: { backgroundColor: 'rgba(239, 68, 68, 0.15)' },
   statusChipText: {
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: '800'
   },
   pauseBtn: {
@@ -990,7 +1450,7 @@ const styles = StyleSheet.create({
   },
   tabItem: {
     flex: 1,
-    paddingVertical: 12,
+    paddingVertical: 11,
     alignItems: 'center'
   },
   tabItemActive: {
@@ -998,7 +1458,7 @@ const styles = StyleSheet.create({
     borderBottomColor: '#3B82F6'
   },
   tabItemText: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '600',
     color: '#64748B'
   },
