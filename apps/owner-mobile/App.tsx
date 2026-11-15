@@ -648,6 +648,111 @@ export default function OwnerMobileApp() {
     setStaffRole('barber');
   };
 
+  // 4c. Direct Owner Queue Actions (Accept / Seat / Complete / Verify)
+  const handleOwnerVerifyCheckIn = async (entry: QueueEntryWithDetails) => {
+    try {
+      const token = entry.qr_code_token || 'DIRECT_OWNER_VERIFIED';
+      const { error: rpcErr } = await (supabase.rpc as any)('verify_qr_checkin', {
+        p_entry_id: entry.id,
+        p_qr_token: token
+      });
+
+      if (rpcErr) {
+        // Fallback update checked_in_at
+        const { error } = await (supabase.from('queue_entries') as any)
+          .update({ checked_in_at: new Date().toISOString() })
+          .eq('id', entry.id);
+        if (error) throw error;
+      }
+
+      Alert.alert(
+        'Arrival Verified',
+        `Customer #${entry.queue_number} (${entry.customer?.full_name || entry.guest_name || 'Customer'}) arrival has been verified in-store!`
+      );
+      await loadOwnerData();
+    } catch (err: any) {
+      Alert.alert('Verification Error', err.message || 'Could not verify customer arrival.');
+    }
+  };
+
+  const handleOwnerStartService = async (entry: QueueEntryWithDetails) => {
+    try {
+      const { error: rpcErr } = await (supabase.rpc as any)('start_service_atomic', {
+        p_entry_id: entry.id,
+        p_barber_id: entry.barber_id || null
+      });
+
+      if (rpcErr) {
+        const { error } = await (supabase.from('queue_entries') as any)
+          .update({
+            status: 'in_service',
+            called_at: new Date().toISOString()
+          })
+          .eq('id', entry.id);
+        if (error) throw error;
+      }
+
+      Alert.alert(
+        'Service Started',
+        `Customer #${entry.queue_number} (${entry.customer?.full_name || entry.guest_name || 'Customer'}) is now seated in the chair!`
+      );
+      await loadOwnerData();
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Could not start service.');
+    }
+  };
+
+  const handleOwnerCompleteService = async (entry: QueueEntryWithDetails) => {
+    try {
+      const { error: rpcErr } = await (supabase.rpc as any)('complete_service_atomic', {
+        p_entry_id: entry.id
+      });
+
+      if (rpcErr) {
+        const { error } = await (supabase.from('queue_entries') as any)
+          .update({
+            status: 'completed',
+            completed_at: new Date().toISOString()
+          })
+          .eq('id', entry.id);
+        if (error) throw error;
+      }
+
+      Alert.alert(
+        'Service Completed',
+        `Haircut for #${entry.queue_number} completed. Revenue added to your Earnings tab (Strict ₹0 fee)!`
+      );
+      await loadOwnerData();
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Could not complete service.');
+    }
+  };
+
+  const handleOwnerCancelTicket = (entry: QueueEntryWithDetails) => {
+    Alert.alert(
+      'Cancel Ticket',
+      `Cancel ticket #${entry.queue_number} (${entry.customer?.full_name || entry.guest_name || 'Customer'})?`,
+      [
+        { text: 'Back', style: 'cancel' },
+        {
+          text: 'Cancel Ticket',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const { error } = await (supabase.from('queue_entries') as any)
+                .update({ status: 'cancelled' })
+                .eq('id', entry.id);
+              if (error) throw error;
+              await loadOwnerData();
+            } catch (err: any) {
+              Alert.alert('Error', err.message || 'Could not cancel ticket.');
+            }
+          }
+        }
+      ]
+    );
+  };
+
   // 5. Calculations
   const waitingEntries = useMemo(
     () => queueEntries.filter((q) => q.status === 'waiting' || q.status === 'in_service'),
@@ -1115,26 +1220,84 @@ export default function OwnerMobileApp() {
                 </Text>
               </View>
             ) : (
-              waitingEntries.map((entry) => (
-                <View key={entry.id} style={styles.queueCard}>
-                  <View style={styles.queueCardTop}>
-                    <View style={styles.queueNumBadge}>
-                      <Text style={styles.queueNumText}>#{entry.queue_number}</Text>
+              waitingEntries.map((entry) => {
+                const isCheckedIn = !!entry.checked_in_at;
+                const isInChair = entry.status === 'in_service';
+                return (
+                  <View key={entry.id} style={[styles.queueCard, isInChair && styles.queueCardInChair]}>
+                    <View style={styles.queueCardTop}>
+                      <View style={[styles.queueNumBadge, isInChair && { backgroundColor: '#10B981' }]}>
+                        <Text style={styles.queueNumText}>#{entry.queue_number}</Text>
+                      </View>
+                      <View style={{ flex: 1, marginLeft: 12 }}>
+                        <Text style={styles.customerName}>
+                          {entry.customer?.full_name || entry.guest_name || 'Walk-in Guest'}
+                        </Text>
+                        <Text style={styles.serviceName}>
+                          ✂️ {entry.service?.name || 'Haircut Service'} (₹{entry.service?.price || 200})
+                        </Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 }}>
+                          <View
+                            style={[
+                              styles.arrivalStatusPill,
+                              isCheckedIn ? styles.arrivalStatusPillVerified : styles.arrivalStatusPillWaiting
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.arrivalStatusText,
+                                isCheckedIn ? { color: '#10B981' } : { color: '#F59E0B' }
+                              ]}
+                            >
+                              {isCheckedIn ? '✓ Arrival Verified' : '⏳ Waiting Arrival Pass'}
+                            </Text>
+                          </View>
+                        </View>
+                      </View>
+                      <View style={[styles.statusPill, isInChair && { backgroundColor: 'rgba(16, 185, 129, 0.2)' }]}>
+                        <Text style={[styles.statusPillText, isInChair && { color: '#10B981' }]}>
+                          {isInChair ? 'IN CHAIR' : entry.status.toUpperCase()}
+                        </Text>
+                      </View>
                     </View>
-                    <View style={{ flex: 1, marginLeft: 12 }}>
-                      <Text style={styles.customerName}>
-                        {entry.customer?.full_name || entry.guest_name || 'Walk-in Guest'}
-                      </Text>
-                      <Text style={styles.serviceName}>
-                        ✂️ {entry.service?.name || 'Haircut Service'} (₹{entry.service?.price || 200})
-                      </Text>
-                    </View>
-                    <View style={styles.statusPill}>
-                      <Text style={styles.statusPillText}>{entry.status.toUpperCase()}</Text>
+
+                    {/* Quick Action Buttons for Owner */}
+                    <View style={styles.queueActionsRow}>
+                      {!isCheckedIn && (
+                        <TouchableOpacity
+                          style={styles.actionVerifyBtn}
+                          onPress={() => handleOwnerVerifyCheckIn(entry)}
+                        >
+                          <Text style={styles.actionVerifyText}>✓ Accept Arrival</Text>
+                        </TouchableOpacity>
+                      )}
+
+                      {!isInChair ? (
+                        <TouchableOpacity
+                          style={styles.actionSeatBtn}
+                          onPress={() => handleOwnerStartService(entry)}
+                        >
+                          <Text style={styles.actionSeatText}>▶ Seat / Start Service</Text>
+                        </TouchableOpacity>
+                      ) : (
+                        <TouchableOpacity
+                          style={styles.actionCompleteBtn}
+                          onPress={() => handleOwnerCompleteService(entry)}
+                        >
+                          <Text style={styles.actionCompleteText}>✓ Complete Cut</Text>
+                        </TouchableOpacity>
+                      )}
+
+                      <TouchableOpacity
+                        style={styles.actionCancelBtn}
+                        onPress={() => handleOwnerCancelTicket(entry)}
+                      >
+                        <Text style={styles.actionCancelText}>Cancel</Text>
+                      </TouchableOpacity>
                     </View>
                   </View>
-                </View>
-              ))
+                );
+              })
             )}
           </View>
         )}
@@ -2041,6 +2204,80 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '700',
     color: '#F59E0B'
+  },
+
+  queueCardInChair: {
+    borderColor: '#10B981',
+    backgroundColor: '#0A1820'
+  },
+  arrivalStatusPill: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 8
+  },
+  arrivalStatusPillVerified: {
+    backgroundColor: 'rgba(16, 185, 129, 0.15)'
+  },
+  arrivalStatusPillWaiting: {
+    backgroundColor: 'rgba(245, 158, 11, 0.15)'
+  },
+  arrivalStatusText: {
+    fontSize: 10,
+    fontWeight: '700'
+  },
+  queueActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#1F2937',
+    paddingTop: 10,
+    flexWrap: 'wrap'
+  },
+  actionVerifyBtn: {
+    backgroundColor: '#10B981',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6
+  },
+  actionVerifyText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '700'
+  },
+  actionSeatBtn: {
+    backgroundColor: '#3B82F6',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 6
+  },
+  actionSeatText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '700'
+  },
+  actionCompleteBtn: {
+    backgroundColor: '#10B981',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 6
+  },
+  actionCompleteText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '700'
+  },
+  actionCancelBtn: {
+    backgroundColor: '#1E293B',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6
+  },
+  actionCancelText: {
+    color: '#94A3B8',
+    fontSize: 11,
+    fontWeight: '600'
   },
 
   // Earnings
