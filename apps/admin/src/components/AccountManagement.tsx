@@ -20,6 +20,15 @@ export default function AccountManagement({
   const [selectedRole, setSelectedRole] = useState<Profile['role']>('customer');
   const [loading, setLoading] = useState(false);
 
+  // Create Account Modal state
+  const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [newRole, setNewRole] = useState<Profile['role']>('staff');
+  const [newName, setNewName] = useState('');
+  const [newEmail, setNewEmail] = useState('');
+  const [newPhone, setNewPhone] = useState('');
+  const [newPassword, setNewPassword] = useState('Password123!');
+  const [creating, setCreating] = useState(false);
+
   const supabase = getSupabaseClient();
 
   const filteredProfiles = profiles.filter((p) => {
@@ -42,7 +51,7 @@ export default function AccountManagement({
 
     try {
       // 1. Execute secure admin role RPC
-      const { data: rpcData, error: rpcError } = await (supabase.rpc as any)('admin_set_user_role', {
+      const { error: rpcError } = await (supabase.rpc as any)('admin_set_user_role', {
         p_user_id: editingProfile.id,
         p_new_role: selectedRole
       });
@@ -80,6 +89,64 @@ export default function AccountManagement({
     }
   };
 
+  const handleCreateAccount = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newName.trim() || !newEmail.trim() || !newPassword.trim()) {
+      alert('Please fill in Name, Email, and Password.');
+      return;
+    }
+
+    setCreating(true);
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email: newEmail.trim(),
+        password: newPassword,
+        options: {
+          data: {
+            full_name: newName.trim(),
+            phone: newPhone.trim() || null,
+            role: newRole
+          }
+        }
+      });
+
+      if (error) throw error;
+
+      const newId = data.user?.id || data.session?.user?.id;
+      if (newId) {
+        const newProfile: Profile = {
+          id: newId,
+          role: newRole,
+          full_name: newName.trim(),
+          phone: newPhone.trim() || null,
+          avatar_url: null,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        };
+
+        await (supabase.from('profiles') as any).upsert(newProfile);
+
+        await logAdminAction(adminId, 'ACCOUNT_PROVISIONED_BY_ADMIN', 'profiles', newId, {
+          user_name: newName.trim(),
+          email: newEmail.trim(),
+          role: newRole
+        });
+
+        onProfileUpdated(newProfile);
+        setCreateModalOpen(false);
+        setNewName('');
+        setNewEmail('');
+        setNewPhone('');
+        setNewPassword('Password123!');
+        alert(`Account for "${newName.trim()}" provisioned successfully with role ${newRole.toUpperCase()}!`);
+      }
+    } catch (err: any) {
+      alert(`Provisioning failed: ${err.message}`);
+    } finally {
+      setCreating(false);
+    }
+  };
+
   return (
     <div>
       {/* Top Filter and Search */}
@@ -100,13 +167,32 @@ export default function AccountManagement({
           </p>
         </div>
 
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+          <button
+            onClick={() => setCreateModalOpen(true)}
+            style={{
+              background: 'linear-gradient(135deg, #6366F1 0%, #4F46E5 100%)',
+              color: '#FFFFFF',
+              border: 'none',
+              padding: '8px 16px',
+              borderRadius: 8,
+              fontSize: 13,
+              fontWeight: 800,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6
+            }}
+          >
+            <span>+</span> Create Account
+          </button>
+
           <input
             type="text"
             placeholder="Search by name, phone or UUID..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            style={{ width: 280 }}
+            style={{ width: 250 }}
           />
 
           <div style={{ display: 'flex', background: 'var(--bg-secondary)', borderRadius: 8, padding: 3, border: '1px solid var(--border-color)' }}>
@@ -203,10 +289,11 @@ export default function AccountManagement({
                           padding: '6px 12px',
                           borderRadius: 6,
                           fontSize: 12,
-                          fontWeight: 700
+                          fontWeight: 700,
+                          cursor: 'pointer'
                         }}
                       >
-                        Modify Role
+                        Edit Role
                       </button>
                     </td>
                   </tr>
@@ -217,20 +304,189 @@ export default function AccountManagement({
         </div>
       </div>
 
-      {/* Edit Role Modal */}
+      {/* Modal: Create Account */}
+      {createModalOpen && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(0, 0, 0, 0.75)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: 20
+          }}
+        >
+          <div
+            className="glass-panel"
+            style={{
+              width: '100%',
+              maxWidth: 480,
+              padding: 28,
+              border: '1px solid rgba(99, 102, 241, 0.4)'
+            }}
+          >
+            <h3 style={{ fontSize: 18, fontWeight: 800, marginBottom: 6 }}>Provision New Platform Account</h3>
+            <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 20 }}>
+              Create an account and assign platform privileges.
+            </p>
+
+            <form onSubmit={handleCreateAccount} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <div>
+                <label style={{ display: 'block', fontSize: 11, fontWeight: 700, marginBottom: 6, textTransform: 'uppercase' }}>
+                  Platform Role
+                </label>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  {(['staff', 'owner', 'admin', 'customer'] as const).map((r) => (
+                    <button
+                      key={r}
+                      type="button"
+                      onClick={() => setNewRole(r)}
+                      style={{
+                        flex: 1,
+                        padding: '8px',
+                        borderRadius: 6,
+                        fontWeight: 700,
+                        fontSize: 12,
+                        textTransform: 'capitalize',
+                        background: newRole === r ? 'var(--accent-indigo)' : 'var(--bg-secondary)',
+                        color: newRole === r ? '#FFFFFF' : 'var(--text-secondary)',
+                        border: '1px solid var(--border-color)'
+                      }}
+                    >
+                      {r}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: 11, fontWeight: 700, marginBottom: 6, textTransform: 'uppercase' }}>
+                  Full Name
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Rohan Verma"
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  style={{ width: '100%' }}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: 11, fontWeight: 700, marginBottom: 6, textTransform: 'uppercase' }}>
+                  Email Address
+                </label>
+                <input
+                  type="email"
+                  required
+                  placeholder="rohan@example.com"
+                  value={newEmail}
+                  onChange={(e) => setNewEmail(e.target.value)}
+                  style={{ width: '100%' }}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: 11, fontWeight: 700, marginBottom: 6, textTransform: 'uppercase' }}>
+                  Phone Number (Optional)
+                </label>
+                <input
+                  type="tel"
+                  placeholder="+91 98765 43210"
+                  value={newPhone}
+                  onChange={(e) => setNewPhone(e.target.value)}
+                  style={{ width: '100%' }}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: 11, fontWeight: 700, marginBottom: 6, textTransform: 'uppercase' }}>
+                  Initial Password
+                </label>
+                <input
+                  type="password"
+                  required
+                  placeholder="Password123!"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  style={{ width: '100%' }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end', marginTop: 10 }}>
+                <button
+                  type="button"
+                  onClick={() => setCreateModalOpen(false)}
+                  style={{
+                    background: 'transparent',
+                    border: '1px solid var(--border-color)',
+                    color: 'var(--text-secondary)',
+                    padding: '10px 18px',
+                    borderRadius: 8,
+                    fontWeight: 600
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={creating}
+                  style={{
+                    background: 'var(--accent-indigo)',
+                    color: '#FFFFFF',
+                    padding: '10px 20px',
+                    borderRadius: 8,
+                    fontWeight: 800
+                  }}
+                >
+                  {creating ? 'Creating Account...' : 'Provision Account'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Edit User Role */}
       {editingProfile && (
-        <div className="modal-overlay">
-          <div className="modal-content">
-            <h3 style={{ fontSize: 18, fontWeight: 800, marginBottom: 12 }}>
-              Modify Role: {editingProfile.full_name}
-            </h3>
-            <p style={{ fontSize: 14, color: 'var(--text-secondary)', marginBottom: 20 }}>
-              Adjust system access privileges for this account. Changes take effect on next login/token refresh.
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(0, 0, 0, 0.75)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: 20
+          }}
+        >
+          <div
+            className="glass-panel"
+            style={{
+              width: '100%',
+              maxWidth: 440,
+              padding: 28,
+              border: '1px solid rgba(99, 102, 241, 0.4)'
+            }}
+          >
+            <h3 style={{ fontSize: 18, fontWeight: 800, marginBottom: 6 }}>Manage Account Role</h3>
+            <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 20 }}>
+              Adjust platform access permissions for &ldquo;{editingProfile.full_name}&rdquo;.
             </p>
 
             <div style={{ marginBottom: 24 }}>
-              <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', marginBottom: 8 }}>
-                ASSIGN PLATFORM ROLE
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 10, color: 'var(--text-muted)' }}>
+                SELECT NEW ROLE:
               </label>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                 {(['customer', 'staff', 'owner', 'admin'] as const).map((role) => (

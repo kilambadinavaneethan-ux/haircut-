@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   RefreshControl,
   Alert,
+  Modal,
   Platform
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
@@ -60,14 +61,19 @@ export default function AdminMobileApp() {
   const [adminUser, setAdminUser] = useState<{ id: string; email: string; name: string } | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
 
-  // Login form state
+  // Auth form state (Supports Sign In & Create Account)
+  const [isSignUp, setIsSignUp] = useState(false);
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
+  const [signUpFullName, setSignUpFullName] = useState('');
+  const [signUpPhone, setSignUpPhone] = useState('');
+  const [adminPasscode, setAdminPasscode] = useState('QUICKCUT2026');
   const [loggingIn, setLoggingIn] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [authSuccess, setAuthSuccess] = useState<string | null>(null);
 
   // Admin Data state
-  const [activeTab, setActiveTab] = useState<'shops' | 'metrics' | 'audit' | 'tickets'>('shops');
+  const [activeTab, setActiveTab] = useState<'shops' | 'accounts' | 'metrics' | 'audit' | 'tickets'>('shops');
   const [shops, setShops] = useState<Shop[]>(SEED_SHOPS);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
@@ -76,9 +82,23 @@ export default function AdminMobileApp() {
   const [loadingData, setLoadingData] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
-  // Shop filter
+  // Filter & Search
   const [shopFilter, setShopFilter] = useState<'all' | 'pending' | 'approved' | 'suspended'>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [accountFilter, setAccountFilter] = useState<'all' | 'admin' | 'owner' | 'staff' | 'customer'>('all');
+  const [accountSearch, setAccountSearch] = useState('');
+
+  // Modals inside Admin App
+  const [createAccountModalVisible, setCreateAccountModalVisible] = useState(false);
+  const [newAccRole, setNewAccRole] = useState<'admin' | 'owner' | 'staff' | 'customer'>('staff');
+  const [newAccName, setNewAccName] = useState('');
+  const [newAccEmail, setNewAccEmail] = useState('');
+  const [newAccPhone, setNewAccPhone] = useState('');
+  const [newAccPassword, setNewAccPassword] = useState('Password123!');
+  const [creatingAccount, setCreatingAccount] = useState(false);
+
+  const [roleEditProfile, setRoleEditProfile] = useState<Profile | null>(null);
+  const [roleEditTarget, setRoleEditTarget] = useState<Profile['role']>('customer');
 
   const supabase = getSupabaseClient();
 
@@ -92,7 +112,6 @@ export default function AdminMobileApp() {
       setAuthLoading(true);
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
-        // Verify admin role or allow known admin email
         const { data: profile } = await supabase
           .from('profiles')
           .select('*')
@@ -128,7 +147,7 @@ export default function AdminMobileApp() {
       }
 
       // Load profiles
-      const { data: dbProfiles } = await supabase.from('profiles').select('*');
+      const { data: dbProfiles } = await supabase.from('profiles').select('*').order('created_at', { ascending: false });
       if (dbProfiles) setProfiles(dbProfiles as Profile[]);
 
       // Load queues for metrics
@@ -168,41 +187,112 @@ export default function AdminMobileApp() {
     loadAdminData();
   };
 
-  // 3. Handle Admin Login
-  const handleLogin = async () => {
+  // 3. Handle Admin Authentication (Sign In & Sign Up)
+  const handleAuthSubmit = async () => {
+    setAuthError(null);
+    setAuthSuccess(null);
+
     if (!loginEmail.trim() || !loginPassword.trim()) {
       setAuthError('Please enter admin email and password.');
       return;
     }
 
     setLoggingIn(true);
-    setAuthError(null);
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email: loginEmail.trim(),
-        password: loginPassword
-      });
+      if (isSignUp) {
+        // Sign Up New Admin Account
+        if (!signUpFullName.trim()) {
+          setAuthError('Please enter your full name.');
+          setLoggingIn(false);
+          return;
+        }
 
-      if (error) throw error;
-      if (data.user) {
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', data.user.id)
-          .single();
+        if (loginPassword.length < 6) {
+          setAuthError('Password must be at least 6 characters.');
+          setLoggingIn(false);
+          return;
+        }
 
-        const role = (profile as any)?.role;
-        const name = (profile as any)?.full_name || 'Super Admin';
+        const { data, error } = await supabase.auth.signUp({
+          email: loginEmail.trim(),
+          password: loginPassword,
+          options: {
+            data: {
+              full_name: signUpFullName.trim(),
+              phone: signUpPhone.trim() || null,
+              role: 'admin'
+            }
+          }
+        });
 
-        if (role === 'admin' || data.user.email?.includes('admin')) {
-          setAdminUser({ id: data.user.id, email: data.user.email || '', name });
-        } else {
-          setAuthError('Access restricted: Account does not have administrator privileges.');
-          await supabase.auth.signOut();
+        if (error) throw error;
+
+        const userId = data.user?.id || data.session?.user?.id;
+        if (userId) {
+          // Guarantee profile row is set to 'admin'
+          await (supabase.from('profiles') as any).upsert({
+            id: userId,
+            role: 'admin',
+            full_name: signUpFullName.trim(),
+            phone: signUpPhone.trim() || null,
+            updated_at: new Date().toISOString()
+          });
+
+          // Attempt immediate session sign-in if needed
+          if (!data.session?.user) {
+            const { data: signInRes } = await supabase.auth.signInWithPassword({
+              email: loginEmail.trim(),
+              password: loginPassword
+            });
+            if (signInRes?.user) {
+              setAdminUser({
+                id: signInRes.user.id,
+                email: signInRes.user.email || '',
+                name: signUpFullName.trim()
+              });
+              return;
+            }
+          } else {
+            setAdminUser({
+              id: userId,
+              email: loginEmail.trim(),
+              name: signUpFullName.trim()
+            });
+            return;
+          }
+
+          // If confirmation required
+          setIsSignUp(false);
+          setAuthSuccess('Admin account created! Please sign in with your credentials.');
+        }
+      } else {
+        // Sign In Existing Admin Account
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email: loginEmail.trim(),
+          password: loginPassword
+        });
+
+        if (error) throw error;
+        if (data.user) {
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', data.user.id)
+            .single();
+
+          const role = (profile as any)?.role;
+          const name = (profile as any)?.full_name || 'Super Admin';
+
+          if (role === 'admin' || data.user.email?.includes('admin')) {
+            setAdminUser({ id: data.user.id, email: data.user.email || '', name });
+          } else {
+            setAuthError('Access restricted: Account does not have administrator privileges.');
+            await supabase.auth.signOut();
+          }
         }
       }
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Login failed';
+      const msg = err instanceof Error ? err.message : 'Authentication failed';
       setAuthError(msg);
     } finally {
       setLoggingIn(false);
@@ -212,6 +302,8 @@ export default function AdminMobileApp() {
   const fillSeedAdmin = () => {
     setLoginEmail('admin@quickcut.com');
     setLoginPassword('Password123!');
+    setIsSignUp(false);
+    setAuthError(null);
   };
 
   const handleSignOut = async () => {
@@ -228,7 +320,6 @@ export default function AdminMobileApp() {
 
       if (error) throw error;
 
-      // Log audit
       await (supabase.from('audit_logs') as any).insert({
         user_id: adminUser?.id,
         action: 'SHOP_APPROVED',
@@ -305,6 +396,103 @@ export default function AdminMobileApp() {
     }
   };
 
+  // 5. Account Provisioning Action (Inside Admin App)
+  const handleProvisionAccount = async () => {
+    if (!newAccName.trim() || !newAccEmail.trim() || !newAccPassword.trim()) {
+      Alert.alert('Required Fields', 'Please fill in Name, Email, and Password.');
+      return;
+    }
+
+    setCreatingAccount(true);
+    try {
+      // 1. Sign up user via Supabase
+      const { data, error } = await supabase.auth.signUp({
+        email: newAccEmail.trim(),
+        password: newAccPassword,
+        options: {
+          data: {
+            full_name: newAccName.trim(),
+            phone: newAccPhone.trim() || null,
+            role: newAccRole
+          }
+        }
+      });
+
+      if (error) throw error;
+
+      const createdUserId = data.user?.id || data.session?.user?.id;
+      if (createdUserId) {
+        // 2. Ensure profile has chosen role
+        const newProfile: Profile = {
+          id: createdUserId,
+          role: newAccRole,
+          full_name: newAccName.trim(),
+          phone: newAccPhone.trim() || null,
+          avatar_url: null,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        };
+
+        await (supabase.from('profiles') as any).upsert(newProfile);
+
+        // 3. Log audit event
+        await (supabase.from('audit_logs') as any).insert({
+          user_id: adminUser?.id,
+          action: 'ACCOUNT_PROVISIONED_BY_ADMIN',
+          entity_type: 'profiles',
+          entity_id: createdUserId,
+          payload: {
+            user_name: newAccName.trim(),
+            email: newAccEmail.trim(),
+            role: newAccRole
+          }
+        });
+
+        setProfiles((prev) => [newProfile, ...prev]);
+        setCreateAccountModalVisible(false);
+        setNewAccName('');
+        setNewAccEmail('');
+        setNewAccPhone('');
+        setNewAccPassword('Password123!');
+        Alert.alert('Account Created', `Successfully provisioned ${newAccRole.toUpperCase()} account for "${newAccName.trim()}".`);
+      }
+    } catch (err: any) {
+      Alert.alert('Provisioning Error', err.message || 'Failed to create account.');
+    } finally {
+      setCreatingAccount(false);
+    }
+  };
+
+  const handleSaveUserRole = async () => {
+    if (!roleEditProfile) return;
+    try {
+      const { error } = await (supabase.from('profiles') as any)
+        .update({ role: roleEditTarget, updated_at: new Date().toISOString() })
+        .eq('id', roleEditProfile.id);
+
+      if (error) throw error;
+
+      await (supabase.from('audit_logs') as any).insert({
+        user_id: adminUser?.id,
+        action: 'PROFILE_ROLE_UPDATED',
+        entity_type: 'profiles',
+        entity_id: roleEditProfile.id,
+        payload: {
+          user_name: roleEditProfile.full_name,
+          new_role: roleEditTarget
+        }
+      });
+
+      setProfiles((prev) =>
+        prev.map((p) => (p.id === roleEditProfile.id ? { ...p, role: roleEditTarget } : p))
+      );
+      setRoleEditProfile(null);
+      Alert.alert('Role Updated', `User role changed to ${roleEditTarget.toUpperCase()}.`);
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Failed to update role.');
+    }
+  };
+
   const handleResolveTicket = async (ticketId: string) => {
     try {
       await (supabase.from('support_tickets') as any)
@@ -337,6 +525,15 @@ export default function AdminMobileApp() {
     return matchesFilter && matchesSearch;
   });
 
+  // Filtered accounts
+  const filteredProfiles = profiles.filter((p) => {
+    const matchesRole = accountFilter === 'all' || p.role === accountFilter;
+    const matchesSearch =
+      p.full_name.toLowerCase().includes(accountSearch.toLowerCase()) ||
+      (p.phone && p.phone.toLowerCase().includes(accountSearch.toLowerCase()));
+    return matchesRole && matchesSearch;
+  });
+
   // ==========================================
   // RENDER: Loading State
   // ==========================================
@@ -351,7 +548,7 @@ export default function AdminMobileApp() {
   }
 
   // ==========================================
-  // RENDER: Admin Login Screen
+  // RENDER: Admin Auth Screen (Sign In & Sign Up)
   // ==========================================
   if (!adminUser) {
     return (
@@ -367,15 +564,82 @@ export default function AdminMobileApp() {
           </View>
 
           <View style={styles.authCard}>
-            <Text style={styles.cardHeader}>Administrator Sign In</Text>
+            {/* Header with Mode Toggle */}
+            <View style={styles.modeToggleRow}>
+              <TouchableOpacity
+                style={[styles.modeTab, !isSignUp && styles.modeTabActive]}
+                onPress={() => {
+                  setIsSignUp(false);
+                  setAuthError(null);
+                  setAuthSuccess(null);
+                }}
+              >
+                <Text style={[styles.modeTabText, !isSignUp && styles.modeTabTextActive]}>
+                  Sign In
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.modeTab, isSignUp && styles.modeTabActive]}
+                onPress={() => {
+                  setIsSignUp(true);
+                  setAuthError(null);
+                  setAuthSuccess(null);
+                }}
+              >
+                <Text style={[styles.modeTabText, isSignUp && styles.modeTabTextActive]}>
+                  Create Account
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.cardHeader}>
+              {isSignUp ? 'Create Administrator Account' : 'Administrator Sign In'}
+            </Text>
             <Text style={styles.cardInfo}>
-              Sign in with your platform super-admin credentials to inspect live queues, approve barbershops, and audit system events.
+              {isSignUp
+                ? 'Register a new super administrator account with platform-wide oversight and barbershop moderation privileges.'
+                : 'Sign in with your platform super-admin credentials to inspect live queues, approve barbershops, and audit system events.'}
             </Text>
 
             {authError && (
               <View style={styles.errorAlert}>
                 <Text style={styles.errorAlertText}>{authError}</Text>
               </View>
+            )}
+
+            {authSuccess && (
+              <View style={styles.successAlert}>
+                <Text style={styles.successAlertText}>{authSuccess}</Text>
+              </View>
+            )}
+
+            {/* Sign Up Specific Fields */}
+            {isSignUp && (
+              <>
+                <View style={styles.formGroup}>
+                  <Text style={styles.formLabel}>Full Name</Text>
+                  <TextInput
+                    style={styles.formInput}
+                    placeholder="Sarah Connor (Admin)"
+                    placeholderTextColor="#64748B"
+                    value={signUpFullName}
+                    onChangeText={setSignUpFullName}
+                  />
+                </View>
+
+                <View style={styles.formGroup}>
+                  <Text style={styles.formLabel}>Phone Number</Text>
+                  <TextInput
+                    style={styles.formInput}
+                    placeholder="+91 99000 11111"
+                    placeholderTextColor="#64748B"
+                    value={signUpPhone}
+                    onChangeText={setSignUpPhone}
+                    keyboardType="phone-pad"
+                  />
+                </View>
+              </>
             )}
 
             <View style={styles.formGroup}>
@@ -403,21 +667,53 @@ export default function AdminMobileApp() {
               />
             </View>
 
+            {isSignUp && (
+              <View style={styles.formGroup}>
+                <Text style={styles.formLabel}>Admin Security Passcode</Text>
+                <TextInput
+                  style={styles.formInput}
+                  placeholder="QUICKCUT2026"
+                  placeholderTextColor="#64748B"
+                  value={adminPasscode}
+                  onChangeText={setAdminPasscode}
+                  autoCapitalize="characters"
+                />
+                <Text style={styles.fieldHint}>Master authorization key: QUICKCUT2026</Text>
+              </View>
+            )}
+
             <TouchableOpacity
               style={styles.submitBtn}
-              onPress={handleLogin}
+              onPress={handleAuthSubmit}
               disabled={loggingIn}
             >
               {loggingIn ? (
                 <ActivityIndicator color="#0F172A" />
               ) : (
-                <Text style={styles.submitBtnText}>Access Admin Station</Text>
+                <Text style={styles.submitBtnText}>
+                  {isSignUp ? 'Create Admin Account' : 'Access Admin Station'}
+                </Text>
               )}
             </TouchableOpacity>
 
             {/* Quick Seed Button */}
             <TouchableOpacity style={styles.seedButton} onPress={fillSeedAdmin}>
-              <Text style={styles.seedButtonText}>⚡ Autofill Super Admin Account</Text>
+              <Text style={styles.seedButtonText}>⚡ Autofill Seed Admin (admin@quickcut.com)</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={{ marginTop: 16, alignItems: 'center' }}
+              onPress={() => {
+                setIsSignUp(!isSignUp);
+                setAuthError(null);
+                setAuthSuccess(null);
+              }}
+            >
+              <Text style={styles.toggleAuthText}>
+                {isSignUp
+                  ? 'Already have an administrator account? Sign In'
+                  : 'Need to create an administrator account? Sign Up'}
+              </Text>
             </TouchableOpacity>
           </View>
 
@@ -462,6 +758,15 @@ export default function AdminMobileApp() {
         </TouchableOpacity>
 
         <TouchableOpacity
+          style={[styles.tabItem, activeTab === 'accounts' && styles.tabItemActive]}
+          onPress={() => setActiveTab('accounts')}
+        >
+          <Text style={[styles.tabItemText, activeTab === 'accounts' && styles.tabItemTextActive]}>
+            👥 Accounts ({profiles.length})
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
           style={[styles.tabItem, activeTab === 'metrics' && styles.tabItemActive]}
           onPress={() => setActiveTab('metrics')}
         >
@@ -475,7 +780,7 @@ export default function AdminMobileApp() {
           onPress={() => setActiveTab('audit')}
         >
           <Text style={[styles.tabItemText, activeTab === 'audit' && styles.tabItemTextActive]}>
-            🔍 Audit Trail
+            🔍 Audit
           </Text>
         </TouchableOpacity>
 
@@ -500,7 +805,6 @@ export default function AdminMobileApp() {
         {/* ======================================= */}
         {activeTab === 'shops' && (
           <View>
-            {/* Search and Filters */}
             <View style={styles.searchBox}>
               <TextInput
                 style={styles.searchInput}
@@ -581,7 +885,6 @@ export default function AdminMobileApp() {
                     </Text>
                   </View>
 
-                  {/* Actions */}
                   <View style={styles.actionButtonsRow}>
                     {shop.status === 'pending' && (
                       <TouchableOpacity
@@ -626,7 +929,134 @@ export default function AdminMobileApp() {
         )}
 
         {/* ======================================= */}
-        {/* TAB 2: LIVE METRICS & POLICY            */}
+        {/* TAB 2: ACCOUNTS MANAGEMENT              */}
+        {/* ======================================= */}
+        {activeTab === 'accounts' && (
+          <View>
+            {/* Header with "+ Create Account" Button */}
+            <View style={styles.sectionHeaderRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.sectionHeading}>User Accounts</Text>
+                <Text style={styles.sectionSubtitle}>
+                  Inspect and provision user accounts across all roles.
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={styles.createAccountBtn}
+                onPress={() => setCreateAccountModalVisible(true)}
+              >
+                <Text style={styles.createAccountBtnText}>+ Create Account</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Search and Filters */}
+            <View style={styles.searchBox}>
+              <TextInput
+                style={styles.searchInput}
+                placeholder="Search accounts by name or phone..."
+                placeholderTextColor="#64748B"
+                value={accountSearch}
+                onChangeText={setAccountSearch}
+              />
+            </View>
+
+            <View style={styles.filterRow}>
+              {(['all', 'admin', 'owner', 'staff', 'customer'] as const).map((r) => (
+                <TouchableOpacity
+                  key={r}
+                  style={[styles.filterChip, accountFilter === r && styles.filterChipActive]}
+                  onPress={() => setAccountFilter(r)}
+                >
+                  <Text
+                    style={[
+                      styles.filterChipText,
+                      accountFilter === r && styles.filterChipTextActive
+                    ]}
+                  >
+                    {r.toUpperCase()}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            {filteredProfiles.length === 0 ? (
+              <View style={styles.emptyState}>
+                <Text style={styles.emptyTitle}>No Accounts Found</Text>
+                <Text style={styles.emptySubtitle}>
+                  No user profiles match the selected role filter or search query.
+                </Text>
+              </View>
+            ) : (
+              filteredProfiles.map((p) => (
+                <View key={p.id} style={styles.accountCard}>
+                  <View style={styles.accountCardTop}>
+                    <View
+                      style={[
+                        styles.avatarCircle,
+                        p.role === 'admin' && { borderColor: '#F59E0B' },
+                        p.role === 'owner' && { borderColor: '#3B82F6' },
+                        p.role === 'staff' && { borderColor: '#A855F7' },
+                        p.role === 'customer' && { borderColor: '#10B981' }
+                      ]}
+                    >
+                      <Text style={styles.avatarText}>
+                        {p.full_name ? p.full_name.charAt(0).toUpperCase() : 'U'}
+                      </Text>
+                    </View>
+
+                    <View style={{ flex: 1, marginLeft: 12 }}>
+                      <Text style={styles.accountName}>
+                        {p.full_name}{' '}
+                        {p.id === adminUser.id && (
+                          <Text style={{ color: '#F59E0B', fontSize: 11 }}>(You)</Text>
+                        )}
+                      </Text>
+                      <Text style={styles.accountPhone}>📞 {p.phone || 'No phone'}</Text>
+                      <Text style={styles.accountIdText}>ID: {p.id.slice(0, 14)}...</Text>
+                    </View>
+
+                    <View style={styles.roleCol}>
+                      <View
+                        style={[
+                          styles.roleBadge,
+                          p.role === 'admin' && styles.roleBadgeAdmin,
+                          p.role === 'owner' && styles.roleBadgeOwner,
+                          p.role === 'staff' && styles.roleBadgeStaff,
+                          p.role === 'customer' && styles.roleBadgeCustomer
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.roleBadgeText,
+                            p.role === 'admin' && { color: '#F59E0B' },
+                            p.role === 'owner' && { color: '#60A5FA' },
+                            p.role === 'staff' && { color: '#C084FC' },
+                            p.role === 'customer' && { color: '#10B981' }
+                          ]}
+                        >
+                          {p.role.toUpperCase()}
+                        </Text>
+                      </View>
+
+                      <TouchableOpacity
+                        style={styles.changeRoleBtn}
+                        onPress={() => {
+                          setRoleEditProfile(p);
+                          setRoleEditTarget(p.role);
+                        }}
+                      >
+                        <Text style={styles.changeRoleBtnText}>Edit Role</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                </View>
+              ))
+            )}
+          </View>
+        )}
+
+        {/* ======================================= */}
+        {/* TAB 3: LIVE METRICS & POLICY            */}
         {/* ======================================= */}
         {activeTab === 'metrics' && (
           <View>
@@ -638,15 +1068,15 @@ export default function AdminMobileApp() {
               </View>
 
               <View style={styles.metricCard}>
-                <Text style={styles.metricValue}>{activeQueuesCount}</Text>
-                <Text style={styles.metricLabel}>Active Customers</Text>
-                <Text style={styles.metricSub}>Waiting or in haircuts right now</Text>
+                <Text style={styles.metricValue}>{profiles.length}</Text>
+                <Text style={styles.metricLabel}>Platform Accounts</Text>
+                <Text style={styles.metricSub}>Admins, Owners, Staff, Customers</Text>
               </View>
 
               <View style={styles.metricCard}>
-                <Text style={styles.metricValue}>{completedQueuesCount}</Text>
-                <Text style={styles.metricLabel}>Completed Services</Text>
-                <Text style={styles.metricSub}>Total completed haircuts</Text>
+                <Text style={styles.metricValue}>{activeQueuesCount}</Text>
+                <Text style={styles.metricLabel}>Active Customers</Text>
+                <Text style={styles.metricSub}>Waiting or in haircuts right now</Text>
               </View>
 
               <View style={[styles.metricCard, styles.metricCardGreen]}>
@@ -666,13 +1096,13 @@ export default function AdminMobileApp() {
         )}
 
         {/* ======================================= */}
-        {/* TAB 3: AUDIT TRAIL                      */}
+        {/* TAB 4: AUDIT TRAIL                      */}
         {/* ======================================= */}
         {activeTab === 'audit' && (
           <View>
             <Text style={styles.sectionHeading}>Tamper-Evident Audit Stream</Text>
             <Text style={styles.sectionSubtitle}>
-              Immutable log of critical platform mutations, QR code arrivals, and shop status changes.
+              Immutable log of critical platform mutations, account creations, and shop status changes.
             </Text>
 
             {auditLogs.length === 0 ? (
@@ -704,7 +1134,7 @@ export default function AdminMobileApp() {
         )}
 
         {/* ======================================= */}
-        {/* TAB 4: SUPPORT & DISPUTES               */}
+        {/* TAB 5: SUPPORT & DISPUTES               */}
         {/* ======================================= */}
         {activeTab === 'tickets' && (
           <View>
@@ -750,6 +1180,154 @@ export default function AdminMobileApp() {
           </View>
         )}
       </ScrollView>
+
+      {/* ======================================= */}
+      {/* MODAL: PROVISION NEW ACCOUNT            */}
+      {/* ======================================= */}
+      <Modal visible={createAccountModalVisible} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Provision New Account</Text>
+            <Text style={styles.modalSubtitle}>
+              Create a new user account and assign its platform security role.
+            </Text>
+
+            {/* Role Selector */}
+            <Text style={styles.formLabel}>Select Account Role</Text>
+            <View style={styles.roleSelectRow}>
+              {(['staff', 'owner', 'admin', 'customer'] as const).map((r) => (
+                <TouchableOpacity
+                  key={r}
+                  style={[styles.roleSelectBtn, newAccRole === r && styles.roleSelectBtnActive]}
+                  onPress={() => setNewAccRole(r)}
+                >
+                  <Text
+                    style={[
+                      styles.roleSelectText,
+                      newAccRole === r && styles.roleSelectTextActive
+                    ]}
+                  >
+                    {r.toUpperCase()}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <View style={styles.formGroup}>
+              <Text style={styles.formLabel}>Full Name</Text>
+              <TextInput
+                style={styles.formInput}
+                placeholder="Rohan Verma"
+                placeholderTextColor="#64748B"
+                value={newAccName}
+                onChangeText={setNewAccName}
+              />
+            </View>
+
+            <View style={styles.formGroup}>
+              <Text style={styles.formLabel}>Email Address</Text>
+              <TextInput
+                style={styles.formInput}
+                placeholder="rohan@example.com"
+                placeholderTextColor="#64748B"
+                value={newAccEmail}
+                onChangeText={setNewAccEmail}
+                keyboardType="email-address"
+                autoCapitalize="none"
+              />
+            </View>
+
+            <View style={styles.formGroup}>
+              <Text style={styles.formLabel}>Phone (Optional)</Text>
+              <TextInput
+                style={styles.formInput}
+                placeholder="+91 98765 43210"
+                placeholderTextColor="#64748B"
+                value={newAccPhone}
+                onChangeText={setNewAccPhone}
+                keyboardType="phone-pad"
+              />
+            </View>
+
+            <View style={styles.formGroup}>
+              <Text style={styles.formLabel}>Initial Password</Text>
+              <TextInput
+                style={styles.formInput}
+                placeholder="Password123!"
+                placeholderTextColor="#64748B"
+                value={newAccPassword}
+                onChangeText={setNewAccPassword}
+                secureTextEntry
+              />
+            </View>
+
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={styles.modalCancel}
+                onPress={() => setCreateAccountModalVisible(false)}
+              >
+                <Text style={styles.modalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.modalSave}
+                onPress={handleProvisionAccount}
+                disabled={creatingAccount}
+              >
+                {creatingAccount ? (
+                  <ActivityIndicator color="#0F172A" />
+                ) : (
+                  <Text style={styles.modalSaveText}>Create Account</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ======================================= */}
+      {/* MODAL: EDIT USER ROLE                   */}
+      {/* ======================================= */}
+      <Modal visible={!!roleEditProfile} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Change User Role</Text>
+            <Text style={styles.modalSubtitle}>
+              Reassign platform permissions for &ldquo;{roleEditProfile?.full_name}&rdquo;.
+            </Text>
+
+            <View style={styles.roleSelectRow}>
+              {(['customer', 'staff', 'owner', 'admin'] as const).map((r) => (
+                <TouchableOpacity
+                  key={r}
+                  style={[styles.roleSelectBtn, roleEditTarget === r && styles.roleSelectBtnActive]}
+                  onPress={() => setRoleEditTarget(r)}
+                >
+                  <Text
+                    style={[
+                      styles.roleSelectText,
+                      roleEditTarget === r && styles.roleSelectTextActive
+                    ]}
+                  >
+                    {r.toUpperCase()}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={styles.modalCancel}
+                onPress={() => setRoleEditProfile(null)}
+              >
+                <Text style={styles.modalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.modalSave} onPress={handleSaveUserRole}>
+                <Text style={styles.modalSaveText}>Update Role</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -778,30 +1356,30 @@ const styles = StyleSheet.create({
   },
   authHeader: {
     alignItems: 'center',
-    marginTop: 20,
-    marginBottom: 28
+    marginTop: 16,
+    marginBottom: 20
   },
   crownCircle: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
+    width: 68,
+    height: 68,
+    borderRadius: 34,
     backgroundColor: '#1E293B',
     borderWidth: 2,
     borderColor: '#F59E0B',
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 12
+    marginBottom: 10
   },
   crownEmoji: {
-    fontSize: 34
+    fontSize: 32
   },
   authTitle: {
-    fontSize: 26,
+    fontSize: 24,
     fontWeight: '800',
     color: '#F8FAFC'
   },
   authSubtitle: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#94A3B8',
     marginTop: 4
   },
@@ -811,6 +1389,30 @@ const styles = StyleSheet.create({
     padding: 20,
     borderWidth: 1,
     borderColor: '#1F2937'
+  },
+  modeToggleRow: {
+    flexDirection: 'row',
+    backgroundColor: '#1E293B',
+    borderRadius: 10,
+    padding: 4,
+    marginBottom: 16
+  },
+  modeTab: {
+    flex: 1,
+    paddingVertical: 8,
+    alignItems: 'center',
+    borderRadius: 8
+  },
+  modeTabActive: {
+    backgroundColor: '#F59E0B'
+  },
+  modeTabText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#94A3B8'
+  },
+  modeTabTextActive: {
+    color: '#0F172A'
   },
   cardHeader: {
     fontSize: 18,
@@ -822,7 +1424,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#94A3B8',
     lineHeight: 18,
-    marginBottom: 18
+    marginBottom: 16
   },
   errorAlert: {
     backgroundColor: '#450A0A',
@@ -836,11 +1438,23 @@ const styles = StyleSheet.create({
     color: '#FCA5A5',
     fontSize: 13
   },
-  formGroup: {
+  successAlert: {
+    backgroundColor: '#064E3B',
+    borderWidth: 1,
+    borderColor: '#10B981',
+    padding: 12,
+    borderRadius: 8,
     marginBottom: 16
   },
+  successAlertText: {
+    color: '#A7F3D0',
+    fontSize: 13
+  },
+  formGroup: {
+    marginBottom: 14
+  },
   formLabel: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '600',
     color: '#CBD5E1',
     marginBottom: 6
@@ -849,59 +1463,68 @@ const styles = StyleSheet.create({
     backgroundColor: '#1E293B',
     borderRadius: 10,
     paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 15,
+    paddingVertical: 11,
+    fontSize: 14,
     color: '#F8FAFC',
     borderWidth: 1,
     borderColor: '#334155'
   },
+  fieldHint: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 4
+  },
   submitBtn: {
     backgroundColor: '#F59E0B',
     borderRadius: 10,
-    paddingVertical: 14,
+    paddingVertical: 13,
     alignItems: 'center',
     marginTop: 8
   },
   submitBtnText: {
     color: '#0F172A',
     fontWeight: '700',
-    fontSize: 16
+    fontSize: 15
   },
   seedButton: {
     backgroundColor: '#1E293B',
     borderRadius: 10,
-    paddingVertical: 12,
+    paddingVertical: 11,
     alignItems: 'center',
-    marginTop: 12,
+    marginTop: 10,
     borderWidth: 1,
     borderColor: '#334155'
   },
   seedButtonText: {
     color: '#F59E0B',
     fontWeight: '600',
-    fontSize: 13
+    fontSize: 12
+  },
+  toggleAuthText: {
+    color: '#94A3B8',
+    fontSize: 12
   },
   zeroFeeBadge: {
-    marginTop: 24,
+    marginTop: 20,
     backgroundColor: '#0F172A',
     borderRadius: 12,
-    padding: 16,
+    padding: 14,
     borderWidth: 1,
     borderColor: '#1E293B'
   },
   zeroFeeTitle: {
     color: '#10B981',
     fontWeight: '700',
-    fontSize: 14,
+    fontSize: 13,
     marginBottom: 4
   },
   zeroFeeSubtitle: {
     color: '#64748B',
-    fontSize: 12,
-    lineHeight: 16
+    fontSize: 11,
+    lineHeight: 15
   },
 
-  // Main Admin Dashboard Styles
+  // Main Dashboard Styles
   mainContainer: {
     flex: 1,
     backgroundColor: '#090D16'
@@ -911,7 +1534,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 18,
-    paddingVertical: 14,
+    paddingVertical: 12,
     backgroundColor: '#111827',
     borderBottomWidth: 1,
     borderBottomColor: '#1F2937'
@@ -920,7 +1543,7 @@ const styles = StyleSheet.create({
     flex: 1
   },
   navLogo: {
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: '800',
     color: '#F59E0B'
   },
@@ -930,14 +1553,14 @@ const styles = StyleSheet.create({
     marginTop: 2
   },
   signOutBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
     backgroundColor: '#1F2937',
     borderRadius: 6
   },
   signOutText: {
     color: '#EF4444',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '600'
   },
 
@@ -950,7 +1573,7 @@ const styles = StyleSheet.create({
   },
   tabItem: {
     flex: 1,
-    paddingVertical: 12,
+    paddingVertical: 11,
     alignItems: 'center'
   },
   tabItemActive: {
@@ -958,7 +1581,7 @@ const styles = StyleSheet.create({
     borderBottomColor: '#F59E0B'
   },
   tabItemText: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '600',
     color: '#64748B'
   },
@@ -971,6 +1594,35 @@ const styles = StyleSheet.create({
     paddingBottom: 40
   },
 
+  // Section Header Row
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12
+  },
+  sectionHeading: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#F8FAFC'
+  },
+  sectionSubtitle: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 2
+  },
+  createAccountBtn: {
+    backgroundColor: '#F59E0B',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 8
+  },
+  createAccountBtnText: {
+    color: '#0F172A',
+    fontWeight: '700',
+    fontSize: 12
+  },
+
   // Search & Filter
   searchBox: {
     marginBottom: 12
@@ -979,22 +1631,23 @@ const styles = StyleSheet.create({
     backgroundColor: '#111827',
     borderRadius: 10,
     paddingHorizontal: 14,
-    paddingVertical: 10,
-    fontSize: 14,
+    paddingVertical: 9,
+    fontSize: 13,
     color: '#F8FAFC',
     borderWidth: 1,
     borderColor: '#1F2937'
   },
   filterRow: {
     flexDirection: 'row',
-    marginBottom: 16
+    marginBottom: 14,
+    flexWrap: 'wrap',
+    gap: 6
   },
   filterChip: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 20,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 16,
     backgroundColor: '#111827',
-    marginRight: 8,
     borderWidth: 1,
     borderColor: '#1F2937'
   },
@@ -1003,12 +1656,88 @@ const styles = StyleSheet.create({
     borderColor: '#F59E0B'
   },
   filterChipText: {
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '700',
     color: '#94A3B8'
   },
   filterChipTextActive: {
     color: '#0F172A'
+  },
+
+  // Account Card
+  accountCard: {
+    backgroundColor: '#111827',
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#1F2937'
+  },
+  accountCardTop: {
+    flexDirection: 'row',
+    alignItems: 'center'
+  },
+  avatarCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#1E293B',
+    borderWidth: 2,
+    borderColor: '#F59E0B',
+    justifyContent: 'center',
+    alignItems: 'center'
+  },
+  avatarText: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#F8FAFC'
+  },
+  accountName: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#F8FAFC'
+  },
+  accountPhone: {
+    fontSize: 11,
+    color: '#94A3B8',
+    marginTop: 2
+  },
+  accountIdText: {
+    fontSize: 10,
+    color: '#64748B',
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    marginTop: 2
+  },
+  roleCol: {
+    alignItems: 'flex-end',
+    gap: 6
+  },
+  roleBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 4,
+    backgroundColor: '#1E293B'
+  },
+  roleBadgeAdmin: { backgroundColor: 'rgba(245, 158, 11, 0.15)' },
+  roleBadgeOwner: { backgroundColor: 'rgba(59, 130, 246, 0.15)' },
+  roleBadgeStaff: { backgroundColor: 'rgba(168, 85, 247, 0.15)' },
+  roleBadgeCustomer: { backgroundColor: 'rgba(16, 185, 129, 0.15)' },
+  roleBadgeText: {
+    fontSize: 9,
+    fontWeight: '800'
+  },
+  changeRoleBtn: {
+    backgroundColor: '#1E293B',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: '#334155'
+  },
+  changeRoleBtnText: {
+    color: '#CBD5E1',
+    fontSize: 10,
+    fontWeight: '600'
   },
 
   // Shop Card
@@ -1180,17 +1909,6 @@ const styles = StyleSheet.create({
   },
 
   // Audit
-  sectionHeading: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#F8FAFC'
-  },
-  sectionSubtitle: {
-    fontSize: 12,
-    color: '#64748B',
-    marginTop: 2,
-    marginBottom: 14
-  },
   auditItem: {
     backgroundColor: '#111827',
     borderRadius: 10,
@@ -1300,5 +2018,81 @@ const styles = StyleSheet.create({
     color: '#64748B',
     textAlign: 'center',
     marginTop: 4
+  },
+
+  // Modal Styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.78)',
+    justifyContent: 'center',
+    padding: 20
+  },
+  modalContent: {
+    backgroundColor: '#111827',
+    borderRadius: 16,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: '#1F2937'
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#F8FAFC'
+  },
+  modalSubtitle: {
+    fontSize: 12,
+    color: '#94A3B8',
+    marginTop: 4,
+    marginBottom: 16
+  },
+  roleSelectRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 16
+  },
+  roleSelectBtn: {
+    flex: 1,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: '#1E293B',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#334155'
+  },
+  roleSelectBtnActive: {
+    backgroundColor: '#F59E0B',
+    borderColor: '#F59E0B'
+  },
+  roleSelectText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#94A3B8'
+  },
+  roleSelectTextActive: {
+    color: '#0F172A'
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 12,
+    marginTop: 14
+  },
+  modalCancel: {
+    paddingHorizontal: 16,
+    paddingVertical: 10
+  },
+  modalCancelText: {
+    color: '#94A3B8',
+    fontWeight: '600'
+  },
+  modalSave: {
+    backgroundColor: '#F59E0B',
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 8
+  },
+  modalSaveText: {
+    color: '#0F172A',
+    fontWeight: '700'
   }
 });
