@@ -12,6 +12,7 @@ import {
 import {
   Shop,
   Service,
+  Barber,
   formatEstimatedWaitDisplay,
   getSupabaseClient
 } from '@quickcut/shared';
@@ -42,6 +43,7 @@ export function ShopDetailModal({
   onJoinedQueueSuccess
 }: ShopDetailModalProps) {
   const [services, setServices] = useState<Service[]>([]);
+  const [barbers, setBarbers] = useState<Barber[]>([]);
   const [selectedServiceId, setSelectedServiceId] = useState<string | null>(null);
   const [loadingServices, setLoadingServices] = useState(false);
   const [isJoining, setIsJoining] = useState(false);
@@ -49,7 +51,7 @@ export function ShopDetailModal({
 
   const supabase = getSupabaseClient();
 
-  // Fetch shop's active services
+  // Fetch shop's active services & on-duty barbers
   useEffect(() => {
     if (visible && shop) {
       setErrorMsg(null);
@@ -61,16 +63,25 @@ export function ShopDetailModal({
   const fetchServices = async (shopId: string) => {
     setLoadingServices(true);
     try {
-      const { data, error } = await supabase
-        .from('services')
-        .select('*')
-        .eq('shop_id', shopId)
-        .eq('is_active', true)
-        .order('price', { ascending: true });
+      const [svcRes, barberRes] = await Promise.all([
+        supabase
+          .from('services')
+          .select('*')
+          .eq('shop_id', shopId)
+          .eq('is_active', true)
+          .order('price', { ascending: true }),
+        supabase
+          .from('barbers')
+          .select('*')
+          .eq('shop_id', shopId)
+          .eq('is_active', true)
+      ]);
 
-      if (error) throw error;
-      const svcList = (data as unknown as Service[]) || [];
+      const svcList = (svcRes.data as unknown as Service[]) || [];
+      const barberList = (barberRes.data as unknown as Barber[]) || [];
       setServices(svcList);
+      setBarbers(barberList);
+
       if (svcList.length > 0) {
         setSelectedServiceId(svcList[0].id);
       }
@@ -196,16 +207,37 @@ export function ShopDetailModal({
           {/* Shop Header */}
           <View style={styles.header}>
             <View style={{ flex: 1 }}>
+              <View style={styles.profileBadgeRow}>
+                <Text style={styles.profileBadgeText}>🏬 SHOP PROFILE</Text>
+                <Text style={styles.verifiedBadgeText}>✓ VERIFIED</Text>
+              </View>
               <Text style={styles.shopName}>{shop.name}</Text>
-              <Text style={styles.shopLocation}>{shop.address}</Text>
+              <Text style={styles.shopLocation}>📍 {shop.address}</Text>
+              {shop.phone && (
+                <Text style={styles.shopPhone}>📞 {shop.phone}</Text>
+              )}
               <Text style={styles.shopHours}>
-                Hours: {shop.opening_time.slice(0, 5)} - {shop.closing_time.slice(0, 5)}
+                ⏰ Hours: {shop.opening_time.slice(0, 5)} - {shop.closing_time.slice(0, 5)}
               </Text>
             </View>
             <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
               <Text style={styles.closeBtnText}>✕</Text>
             </TouchableOpacity>
           </View>
+
+          {/* Active Barbers on Duty */}
+          {barbers.length > 0 && (
+            <View style={styles.barbersSection}>
+              <Text style={styles.barbersSectionTitle}>💈 Barbers on Duty ({barbers.length}):</Text>
+              <View style={styles.barbersRow}>
+                {barbers.map((b) => (
+                  <View key={b.id} style={styles.barberChip}>
+                    <Text style={styles.barberChipText}>✂️ {b.name}</Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+          )}
 
           {/* Queue Metrics & Estimated Wait Badge */}
           <View style={styles.waitBadgeRow}>
@@ -317,6 +349,23 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     marginBottom: 16
   },
+  profileBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 4
+  },
+  profileBadgeText: {
+    color: '#F59E0B',
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.5
+  },
+  verifiedBadgeText: {
+    color: '#10B981',
+    fontSize: 10,
+    fontWeight: '700'
+  },
   shopName: {
     fontSize: 20,
     fontWeight: '800',
@@ -327,10 +376,48 @@ const styles = StyleSheet.create({
     color: '#94A3B8',
     marginTop: 2
   },
+  shopPhone: {
+    fontSize: 12,
+    color: '#38BDF8',
+    marginTop: 2,
+    fontWeight: '600'
+  },
   shopHours: {
     fontSize: 12,
     color: '#64748B',
     marginTop: 4
+  },
+  barbersSection: {
+    marginBottom: 16,
+    backgroundColor: '#0F172A',
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#1E293B'
+  },
+  barbersSectionTitle: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#94A3B8',
+    marginBottom: 6
+  },
+  barbersRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6
+  },
+  barberChip: {
+    backgroundColor: '#1E293B',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#334155'
+  },
+  barberChipText: {
+    fontSize: 11,
+    color: '#E2E8F0',
+    fontWeight: '600'
   },
   closeBtn: {
     padding: 6

@@ -1820,7 +1820,7 @@ const styles = StyleSheet.create({
   accountIdText: {
     fontSize: 10,
     color: '#64748B',
-    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    fontFamily: Platform?.OS === 'ios' ? 'Courier' : 'monospace',
     marginTop: 2
   },
   roleCol: {
@@ -2054,7 +2054,7 @@ const styles = StyleSheet.create({
   auditPayload: {
     color: '#64748B',
     fontSize: 10,
-    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    fontFamily: Platform?.OS === 'ios' ? 'Courier' : 'monospace',
     marginTop: 4
   },
 

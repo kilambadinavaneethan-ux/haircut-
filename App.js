@@ -322,7 +322,7 @@ const styles = StyleSheet.create({
   terminalCode: {
     color: '#10B981',
     fontSize: 11,
-    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    fontFamily: Platform?.OS === 'ios' ? 'Courier' : 'monospace',
     marginBottom: 4
   }
 });

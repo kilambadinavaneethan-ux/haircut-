@@ -350,13 +350,24 @@ export default function CustomerApp() {
           ) : (
             /* List View */
             shops.map((shop) => (
-              <View key={shop.id} style={styles.shopCard}>
+              <TouchableOpacity
+                key={shop.id}
+                style={styles.shopCard}
+                activeOpacity={0.88}
+                onPress={() => handleOpenShopDetail(shop)}
+              >
                 <View style={styles.shopCardHeader}>
                   <View style={{ flex: 1 }}>
+                    <View style={styles.shopCardBadgeRow}>
+                      <Text style={styles.shopCardBadgeText}>🏬 SHOP PROFILE</Text>
+                    </View>
                     <Text style={styles.shopCardName}>{shop.name}</Text>
-                    <Text style={styles.shopCardAddress}>{shop.address}</Text>
+                    <Text style={styles.shopCardAddress}>📍 {shop.address}</Text>
+                    {shop.phone && (
+                      <Text style={styles.shopCardPhone}>📞 {shop.phone}</Text>
+                    )}
                     <Text style={styles.shopCardHours}>
-                      Hours: {shop.opening_time.slice(0, 5)} - {shop.closing_time.slice(0, 5)}
+                      ⏰ Hours: {shop.opening_time.slice(0, 5)} - {shop.closing_time.slice(0, 5)}
                     </Text>
                   </View>
 
@@ -375,7 +386,7 @@ export default function CustomerApp() {
                 {/* Estimate disclaimer banner */}
                 <View style={styles.estimateBanner}>
                   <Text style={styles.estimateBannerText}>
-                    * Wait time is dynamically estimated from current queue lengths.
+                    * Wait time is dynamically estimated from current queue lengths. Tap card to view full shop profile.
                   </Text>
                 </View>
 
@@ -388,10 +399,10 @@ export default function CustomerApp() {
                   onPress={() => handleOpenShopDetail(shop)}
                 >
                   <Text style={styles.viewShopBtnText}>
-                    {shop.is_queue_paused ? '⏸️ Queue Paused — View Details' : 'View Services & Join Queue'}
+                    {shop.is_queue_paused ? '⏸️ Queue Paused — View Profile' : '💈 View Shop Profile & Services →'}
                   </Text>
                 </TouchableOpacity>
-              </View>
+              </TouchableOpacity>
             ))
           )}
 
@@ -602,6 +613,16 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'flex-start'
   },
+  shopCardBadgeRow: {
+    flexDirection: 'row',
+    marginBottom: 4
+  },
+  shopCardBadgeText: {
+    color: '#F59E0B',
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.5
+  },
   shopCardName: {
     fontSize: 17,
     fontWeight: '700',
@@ -611,6 +632,12 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#94A3B8',
     marginTop: 2
+  },
+  shopCardPhone: {
+    fontSize: 12,
+    color: '#38BDF8',
+    marginTop: 2,
+    fontWeight: '600'
   },
   shopCardHours: {
     fontSize: 12,
