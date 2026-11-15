@@ -69,3 +69,20 @@ export function getSupabaseClient(options: CreateClientOptions = {}): SupabaseCl
 
   return client;
 }
+
+/**
+ * Creates an isolated client specifically for provisioning new accounts
+ * without altering or signing out the caller's active session.
+ */
+export function createIsolatedAuthClient(options: CreateClientOptions = {}): SupabaseClient<Database> {
+  const url = options.supabaseUrl || DEFAULT_SUPABASE_URL;
+  const anonKey = options.supabaseAnonKey || DEFAULT_SUPABASE_ANON_KEY;
+  return createClient<Database>(url, anonKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false
+    }
+  });
+}
+

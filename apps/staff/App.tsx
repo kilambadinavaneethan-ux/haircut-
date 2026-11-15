@@ -134,7 +134,21 @@ export default function StaffApp() {
         setIsQueuePaused(!!shop.is_queue_paused);
         await loadShopServices(shop.id);
       } else {
-        setAssignedShop(null);
+        // Fallback: check barbers table if linked there
+        const { data: barberData } = await supabase
+          .from('barbers')
+          .select('shop_id, shop:shops(*)')
+          .eq('user_id', userId)
+          .maybeSingle();
+
+        if (barberData && (barberData as any).shop) {
+          const shop = (barberData as any).shop as Shop;
+          setAssignedShop(shop);
+          setIsQueuePaused(!!shop.is_queue_paused);
+          await loadShopServices(shop.id);
+        } else {
+          setAssignedShop(null);
+        }
       }
     } catch (err) {
       console.warn('Error loading staff shop:', err);

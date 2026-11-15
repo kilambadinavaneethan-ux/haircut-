@@ -18,7 +18,11 @@ import {
   Shop,
   Service,
   QueueEntryWithDetails,
-  getSupabaseClient
+  Barber,
+  ShopStaff,
+  Profile,
+  getSupabaseClient,
+  createIsolatedAuthClient
 } from '@quickcut/shared';
 
 // Seed shop for Alex Rivera (only used if logging in as demo seed owner and offline)
@@ -64,7 +68,9 @@ export default function OwnerMobileApp() {
   const [activeShopId, setActiveShopId] = useState<string>('');
   const [services, setServices] = useState<Service[]>([]);
   const [queueEntries, setQueueEntries] = useState<QueueEntryWithDetails[]>([]);
-  const [activeTab, setActiveTab] = useState<'queue' | 'earnings' | 'services'>('queue');
+  const [barbers, setBarbers] = useState<Barber[]>([]);
+  const [staffList, setStaffList] = useState<(ShopStaff & { profile?: Profile })[]>([]);
+  const [activeTab, setActiveTab] = useState<'queue' | 'staff' | 'services' | 'earnings'>('queue');
   const [loadingData, setLoadingData] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -80,6 +86,25 @@ export default function OwnerMobileApp() {
   const [newServiceName, setNewServiceName] = useState('');
   const [newServicePrice, setNewServicePrice] = useState('250');
   const [newServiceDuration, setNewServiceDuration] = useState('25');
+
+  // Staff Account Provisioning Modal (Owner gives Staff ID & Password)
+  const [staffModalVisible, setStaffModalVisible] = useState(false);
+  const [staffName, setStaffName] = useState('');
+  const [staffEmail, setStaffEmail] = useState('');
+  const [staffPassword, setStaffPassword] = useState('Password123!');
+  const [staffPhone, setStaffPhone] = useState('');
+  const [staffRole, setStaffRole] = useState<'barber' | 'senior_barber' | 'manager'>('barber');
+  const [creatingStaff, setCreatingStaff] = useState(false);
+  const [staffModalError, setStaffModalError] = useState<string | null>(null);
+
+  // Issued Credentials Modal / Card (Shown to owner after creation)
+  const [issuedStaffCredentials, setIssuedStaffCredentials] = useState<{
+    name: string;
+    email: string;
+    password: string;
+    role: string;
+    shopName: string;
+  } | null>(null);
 
   const supabase = getSupabaseClient();
   const activeShop = shops.find((s) => s.id === activeShopId) || shops[0] || null;
@@ -161,9 +186,28 @@ export default function OwnerMobileApp() {
           .order('created_at', { ascending: false });
 
         if (dbQueue) setQueueEntries(dbQueue as QueueEntryWithDetails[]);
+
+        // Load barbers roster for this shop
+        const { data: dbBarbers } = await supabase
+          .from('barbers')
+          .select('*')
+          .eq('shop_id', targetId)
+          .order('name');
+
+        if (dbBarbers) setBarbers(dbBarbers as Barber[]);
+
+        // Load staff mapping for this shop
+        const { data: dbStaff } = await supabase
+          .from('shop_staff')
+          .select('*, profile:profiles(*)')
+          .eq('shop_id', targetId);
+
+        if (dbStaff) setStaffList(dbStaff as unknown as (ShopStaff & { profile?: Profile })[]);
       } else {
         setServices([]);
         setQueueEntries([]);
+        setBarbers([]);
+        setStaffList([]);
       }
     } catch {
       // Offline fallback
@@ -438,6 +482,170 @@ export default function OwnerMobileApp() {
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Failed to add service.');
     }
+  };
+
+  // 4b. Staff Account Management (Owner provisions Staff ID & Password)
+  const handleCreateStaffAccount = async () => {
+    if (!activeShop) {
+      Alert.alert('No Shop Selected', 'Please register or select a barbershop first.');
+      return;
+    }
+    if (!staffName.trim()) {
+      setStaffModalError('Please enter the barber staff full name.');
+      return;
+    }
+    if (!staffEmail.trim()) {
+      setStaffModalError('Please enter the staff login ID (Email).');
+      return;
+    }
+    if (!staffPassword || staffPassword.length < 6) {
+      setStaffModalError('Password must be at least 6 characters.');
+      return;
+    }
+
+    setCreatingStaff(true);
+    setStaffModalError(null);
+
+    try {
+      // 1. Sign up staff member via isolated auth client (keeps owner logged in)
+      const isolatedAuth = createIsolatedAuthClient();
+      const { data: authData, error: authErr } = await isolatedAuth.auth.signUp({
+        email: staffEmail.trim(),
+        password: staffPassword,
+        options: {
+          data: {
+            full_name: staffName.trim(),
+            role: 'staff',
+            phone: staffPhone.trim() || null
+          }
+        }
+      });
+
+      if (authErr) throw authErr;
+
+      const staffUserId = authData.user?.id || authData.session?.user?.id;
+      if (!staffUserId) {
+        throw new Error('Staff user ID could not be generated. Please try again.');
+      }
+
+      // 2. Upsert profile with role 'staff'
+      const newStaffProfile: Profile = {
+        id: staffUserId,
+        role: 'staff',
+        full_name: staffName.trim(),
+        phone: staffPhone.trim() || null,
+        avatar_url: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
+      await (supabase.from('profiles') as any).upsert(newStaffProfile);
+
+      // 3. Link staff to this owner's barbershop
+      await (supabase.from('shop_staff') as any).upsert({
+        shop_id: activeShop.id,
+        user_id: staffUserId,
+        role: staffRole
+      });
+
+      // 4. Create barber station for queue dispatch & wait-time simulation
+      await (supabase.from('barbers') as any).insert({
+        shop_id: activeShop.id,
+        user_id: staffUserId,
+        name: staffName.trim(),
+        is_active: true
+      });
+
+      // 5. Log audit trail
+      if (ownerUser) {
+        await (supabase.from('audit_logs') as any).insert({
+          user_id: ownerUser.id,
+          action: 'STAFF_ACCOUNT_PROVISIONED_BY_OWNER',
+          entity_type: 'shop_staff',
+          entity_id: staffUserId,
+          payload: {
+            shop_id: activeShop.id,
+            shop_name: activeShop.name,
+            staff_name: staffName.trim(),
+            staff_email: staffEmail.trim(),
+            role: staffRole
+          }
+        });
+      }
+
+      // 6. Record issued credentials to display to the owner
+      setIssuedStaffCredentials({
+        name: staffName.trim(),
+        email: staffEmail.trim(),
+        password: staffPassword,
+        role: staffRole,
+        shopName: activeShop.name
+      });
+
+      // Reset form
+      setStaffName('');
+      setStaffEmail('');
+      setStaffPassword('Password123!');
+      setStaffPhone('');
+      setStaffModalVisible(false);
+
+      await loadOwnerData();
+    } catch (err: any) {
+      setStaffModalError(err.message || 'Failed to create staff account.');
+    } finally {
+      setCreatingStaff(false);
+    }
+  };
+
+  const handleToggleBarberActive = async (barber: Barber) => {
+    try {
+      const nextStatus = !barber.is_active;
+      const { error } = await (supabase.from('barbers') as any)
+        .update({ is_active: nextStatus })
+        .eq('id', barber.id);
+
+      if (error) throw error;
+      setBarbers((prev) =>
+        prev.map((b) => (b.id === barber.id ? { ...b, is_active: nextStatus } : b))
+      );
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Could not update barber status.');
+    }
+  };
+
+  const handleDeleteBarber = (barberId: string, name: string) => {
+    Alert.alert(
+      'Remove Barber',
+      `Remove "${name}" from your shop roster?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const { error } = await (supabase.from('barbers') as any)
+                .delete()
+                .eq('id', barberId);
+
+              if (error) throw error;
+              setBarbers((prev) => prev.filter((b) => b.id !== barberId));
+              Alert.alert('Removed', `Barber "${name}" has been removed from this shop.`);
+            } catch (err: any) {
+              Alert.alert('Error', err.message || 'Could not remove barber.');
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  const handleAutofillStaffDemo = () => {
+    const randomSuffix = Math.floor(100 + Math.random() * 900);
+    setStaffName(`Barber Staff ${randomSuffix}`);
+    setStaffEmail(`staff.barber${randomSuffix}@quickcut.com`);
+    setStaffPassword('Password123!');
+    setStaffPhone('+91 97777 33333');
+    setStaffRole('barber');
   };
 
   // 5. Calculations
@@ -846,16 +1054,16 @@ export default function OwnerMobileApp() {
           onPress={() => setActiveTab('queue')}
         >
           <Text style={[styles.tabItemText, activeTab === 'queue' && styles.tabItemTextActive]}>
-            💈 Live Queue ({waitingEntries.length})
+            💈 Queue ({waitingEntries.length})
           </Text>
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={[styles.tabItem, activeTab === 'earnings' && styles.tabItemActive]}
-          onPress={() => setActiveTab('earnings')}
+          style={[styles.tabItem, activeTab === 'staff' && styles.tabItemActive]}
+          onPress={() => setActiveTab('staff')}
         >
-          <Text style={[styles.tabItemText, activeTab === 'earnings' && styles.tabItemTextActive]}>
-            💰 Earnings
+          <Text style={[styles.tabItemText, activeTab === 'staff' && styles.tabItemTextActive]}>
+            👥 Staff ({barbers.length})
           </Text>
         </TouchableOpacity>
 
@@ -864,7 +1072,16 @@ export default function OwnerMobileApp() {
           onPress={() => setActiveTab('services')}
         >
           <Text style={[styles.tabItemText, activeTab === 'services' && styles.tabItemTextActive]}>
-            ✂️ Services ({services.length})
+            ✂️ Menu ({services.length})
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.tabItem, activeTab === 'earnings' && styles.tabItemActive]}
+          onPress={() => setActiveTab('earnings')}
+        >
+          <Text style={[styles.tabItemText, activeTab === 'earnings' && styles.tabItemTextActive]}>
+            💰 Revenue
           </Text>
         </TouchableOpacity>
       </View>
@@ -923,7 +1140,123 @@ export default function OwnerMobileApp() {
         )}
 
         {/* ======================================= */}
-        {/* TAB 2: EARNINGS & ZERO FEE POLICY       */}
+        {/* TAB 2: STAFF BARBERS & ACCOUNTS        */}
+        {/* ======================================= */}
+        {activeTab === 'staff' && (
+          <View>
+            <View style={styles.sectionHeaderRow}>
+              <View>
+                <Text style={styles.sectionTitle}>Staff Barbers & Accounts</Text>
+                <Text style={styles.sectionMeta}>{barbers.length} Barbers Assigned</Text>
+              </View>
+              <TouchableOpacity
+                style={styles.addStaffHeaderBtn}
+                onPress={() => {
+                  setStaffModalError(null);
+                  setStaffModalVisible(true);
+                }}
+              >
+                <Text style={styles.addStaffHeaderBtnText}>+ Give Staff Account</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Instruction banner */}
+            <View style={styles.staffNoticeBanner}>
+              <Text style={styles.staffNoticeTitle}>🔑 Barber Staff Login Access</Text>
+              <Text style={styles.staffNoticeDesc}>
+                Create login IDs and passwords below. Your staff barbers use these credentials to log into the QuickCut Staff App to call customers, update queue status, and scan arrival passes.
+              </Text>
+            </View>
+
+            {barbers.length === 0 ? (
+              <View style={styles.emptyCard}>
+                <Text style={styles.emptyEmoji}>💈</Text>
+                <Text style={styles.emptyTitle}>No Staff Barbers Added Yet</Text>
+                <Text style={styles.emptySubtitle}>
+                  Give your barbers their login credentials so they can access this shop&apos;s queue.
+                </Text>
+                <TouchableOpacity
+                  style={[styles.addStaffHeaderBtn, { marginTop: 14, alignSelf: 'center' }]}
+                  onPress={() => {
+                    setStaffModalError(null);
+                    setStaffModalVisible(true);
+                  }}
+                >
+                  <Text style={styles.addStaffHeaderBtnText}>+ Create Staff Account (ID & Password)</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              barbers.map((b) => {
+                const linkedStaff = staffList.find((s) => s.user_id === b.user_id);
+                const staffProfile = linkedStaff?.profile;
+                return (
+                  <View key={b.id} style={styles.staffCard}>
+                    <View style={styles.staffCardTop}>
+                      <View style={styles.staffAvatar}>
+                        <Text style={styles.staffAvatarEmoji}>💈</Text>
+                      </View>
+                      <View style={{ flex: 1, marginLeft: 12 }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                          <Text style={styles.staffNameText}>{b.name}</Text>
+                          <View style={styles.staffRolePill}>
+                            <Text style={styles.staffRolePillText}>
+                              {(linkedStaff?.role || 'BARBER').toUpperCase()}
+                            </Text>
+                          </View>
+                        </View>
+                        <Text style={styles.staffEmailText}>
+                          🆔 {b.user_id ? `User: ${b.user_id.slice(0, 8)}...` : 'Local Station'}
+                          {staffProfile?.phone ? ` • 📞 ${staffProfile.phone}` : ''}
+                        </Text>
+                      </View>
+
+                      {/* Active Status Badge */}
+                      <TouchableOpacity
+                        style={[
+                          styles.staffStatusBadge,
+                          b.is_active ? styles.staffStatusActive : styles.staffStatusInactive
+                        ]}
+                        onPress={() => handleToggleBarberActive(b)}
+                      >
+                        <Text
+                          style={[
+                            styles.staffStatusText,
+                            b.is_active ? styles.staffStatusTextActive : styles.staffStatusTextInactive
+                          ]}
+                        >
+                          {b.is_active ? '🟢 Serving' : '⚪ On Break'}
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+
+                    <View style={styles.staffCardActions}>
+                      <TouchableOpacity
+                        style={styles.staffActionBtn}
+                        onPress={() => handleToggleBarberActive(b)}
+                      >
+                        <Text style={styles.staffActionBtnText}>
+                          {b.is_active ? 'Set to Break' : 'Set to Serving'}
+                        </Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={[styles.staffActionBtn, styles.staffDeleteBtn]}
+                        onPress={() => handleDeleteBarber(b.id, b.name)}
+                      >
+                        <Text style={[styles.staffActionBtnText, { color: '#EF4444' }]}>
+                          Remove
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                );
+              })
+            )}
+          </View>
+        )}
+
+        {/* ======================================= */}
+        {/* TAB 3: EARNINGS & ZERO FEE POLICY       */}
         {/* ======================================= */}
         {activeTab === 'earnings' && (
           <View>
@@ -1119,6 +1452,169 @@ export default function OwnerMobileApp() {
                 )}
               </TouchableOpacity>
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ======================================= */}
+      {/* MODAL: CREATE STAFF ACCOUNT (ID & PWD)  */}
+      {/* ======================================= */}
+      <Modal visible={staffModalVisible} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Give Staff Account (ID & Password)</Text>
+            <Text style={{ fontSize: 12, color: '#94A3B8', marginBottom: 14 }}>
+              Set up a barber staff login for &quot;{activeShop?.name}&quot;. They will use this Email/ID and Password to log in on the Staff Barber App.
+            </Text>
+
+            {staffModalError && (
+              <View style={styles.errorAlert}>
+                <Text style={styles.errorAlertText}>⚠️ {staffModalError}</Text>
+              </View>
+            )}
+
+            <View style={styles.formGroup}>
+              <Text style={styles.formLabel}>Staff Barber Full Name *</Text>
+              <TextInput
+                style={styles.formInput}
+                placeholder="e.g. Sam Wilson"
+                placeholderTextColor="#64748B"
+                value={staffName}
+                onChangeText={setStaffName}
+              />
+            </View>
+
+            <View style={styles.formGroup}>
+              <Text style={styles.formLabel}>Staff Login ID (Email) *</Text>
+              <TextInput
+                style={styles.formInput}
+                placeholder="staff.sam@quickcut.com"
+                placeholderTextColor="#64748B"
+                value={staffEmail}
+                onChangeText={setStaffEmail}
+                keyboardType="email-address"
+                autoCapitalize="none"
+              />
+            </View>
+
+            <View style={styles.formGroup}>
+              <Text style={styles.formLabel}>Staff Password *</Text>
+              <TextInput
+                style={styles.formInput}
+                placeholder="Password123!"
+                placeholderTextColor="#64748B"
+                value={staffPassword}
+                onChangeText={setStaffPassword}
+                secureTextEntry
+              />
+            </View>
+
+            <View style={styles.formGroup}>
+              <Text style={styles.formLabel}>Staff Phone Number (Optional)</Text>
+              <TextInput
+                style={styles.formInput}
+                placeholder="+91 97777 33333"
+                placeholderTextColor="#64748B"
+                value={staffPhone}
+                onChangeText={setStaffPhone}
+                keyboardType="phone-pad"
+              />
+            </View>
+
+            <View style={styles.formGroup}>
+              <Text style={styles.formLabel}>Role / Position</Text>
+              <View style={styles.rolePickerRow}>
+                {(['barber', 'senior_barber', 'manager'] as const).map((r) => (
+                  <TouchableOpacity
+                    key={r}
+                    style={[styles.roleChip, staffRole === r && styles.roleChipActive]}
+                    onPress={() => setStaffRole(r)}
+                  >
+                    <Text style={[styles.roleChipText, staffRole === r && styles.roleChipTextActive]}>
+                      {r === 'barber' ? 'Barber' : r === 'senior_barber' ? 'Senior Stylist' : 'Manager'}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+
+            {/* Autofill Demo Button */}
+            <TouchableOpacity style={styles.seedButton} onPress={handleAutofillStaffDemo}>
+              <Text style={styles.seedButtonText}>⚡ Autofill Staff Credentials (staff.sam@quickcut.com)</Text>
+            </TouchableOpacity>
+
+            <View style={[styles.modalButtons, { marginTop: 16 }]}>
+              <TouchableOpacity
+                style={styles.modalCancel}
+                onPress={() => setStaffModalVisible(false)}
+                disabled={creatingStaff}
+              >
+                <Text style={styles.modalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.modalSave}
+                onPress={handleCreateStaffAccount}
+                disabled={creatingStaff}
+              >
+                {creatingStaff ? (
+                  <ActivityIndicator color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.modalSaveText}>Create Staff Account</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ======================================= */}
+      {/* MODAL: ISSUED CREDENTIALS RECEIPT       */}
+      {/* ======================================= */}
+      <Modal visible={!!issuedStaffCredentials} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.credentialsModalContent}>
+            <Text style={styles.credentialsTitle}>🎉 Staff Account Ready!</Text>
+            <Text style={styles.credentialsSubtitle}>
+              Give these login credentials to your staff barber so they can access the QuickCut Staff App:
+            </Text>
+
+            <View style={styles.credentialsBox}>
+              <View style={styles.credRow}>
+                <Text style={styles.credLabel}>BARBER NAME:</Text>
+                <Text style={styles.credValue}>{issuedStaffCredentials?.name}</Text>
+              </View>
+              <View style={styles.credRow}>
+                <Text style={styles.credLabel}>STAFF LOGIN ID (EMAIL):</Text>
+                <Text style={styles.credHighlight}>{issuedStaffCredentials?.email}</Text>
+              </View>
+              <View style={styles.credRow}>
+                <Text style={styles.credLabel}>STAFF PASSWORD:</Text>
+                <Text style={styles.credHighlight}>{issuedStaffCredentials?.password}</Text>
+              </View>
+              <View style={styles.credRow}>
+                <Text style={styles.credLabel}>ASSIGNED SHOP:</Text>
+                <Text style={styles.credValue}>{issuedStaffCredentials?.shopName}</Text>
+              </View>
+              <View style={styles.credRow}>
+                <Text style={styles.credLabel}>ROLE:</Text>
+                <Text style={styles.credValue}>
+                  {issuedStaffCredentials?.role.toUpperCase()}
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.credentialsTipBox}>
+              <Text style={styles.credentialsTipText}>
+                💡 Barber instructions: Open the QuickCut Staff App, enter the Login ID and Password above, and tap &quot;Staff Sign In&quot;.
+              </Text>
+            </View>
+
+            <TouchableOpacity
+              style={styles.credentialsDoneBtn}
+              onPress={() => setIssuedStaffCredentials(null)}
+            >
+              <Text style={styles.credentialsDoneBtnText}>Done</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
@@ -1692,6 +2188,234 @@ const styles = StyleSheet.create({
   },
   modalSaveText: {
     color: '#FFFFFF',
+    fontWeight: '700'
+  },
+
+  // Staff Management Styles
+  addStaffHeaderBtn: {
+    backgroundColor: '#3B82F6',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 8
+  },
+  addStaffHeaderBtnText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 12
+  },
+  staffNoticeBanner: {
+    backgroundColor: '#0F172A',
+    borderWidth: 1,
+    borderColor: '#1E293B',
+    padding: 12,
+    borderRadius: 10,
+    marginBottom: 14
+  },
+  staffNoticeTitle: {
+    color: '#60A5FA',
+    fontSize: 12,
+    fontWeight: '700',
+    marginBottom: 3
+  },
+  staffNoticeDesc: {
+    color: '#94A3B8',
+    fontSize: 11,
+    lineHeight: 16
+  },
+  staffCard: {
+    backgroundColor: '#111827',
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#1F2937'
+  },
+  staffCardTop: {
+    flexDirection: 'row',
+    alignItems: 'center'
+  },
+  staffAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#1E293B',
+    borderWidth: 1,
+    borderColor: '#334155',
+    justifyContent: 'center',
+    alignItems: 'center'
+  },
+  staffAvatarEmoji: {
+    fontSize: 18
+  },
+  staffNameText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#F8FAFC'
+  },
+  staffRolePill: {
+    backgroundColor: 'rgba(59, 130, 246, 0.15)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4
+  },
+  staffRolePillText: {
+    color: '#60A5FA',
+    fontSize: 9,
+    fontWeight: '800'
+  },
+  staffEmailText: {
+    fontSize: 11,
+    color: '#94A3B8',
+    marginTop: 3
+  },
+  staffStatusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12
+  },
+  staffStatusActive: {
+    backgroundColor: 'rgba(16, 185, 129, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(16, 185, 129, 0.4)'
+  },
+  staffStatusInactive: {
+    backgroundColor: 'rgba(148, 163, 184, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(148, 163, 184, 0.4)'
+  },
+  staffStatusText: {
+    fontSize: 10,
+    fontWeight: '700'
+  },
+  staffStatusTextActive: {
+    color: '#10B981'
+  },
+  staffStatusTextInactive: {
+    color: '#94A3B8'
+  },
+  staffCardActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 8,
+    marginTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#1F2937',
+    paddingTop: 8
+  },
+  staffActionBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 6,
+    backgroundColor: '#1E293B'
+  },
+  staffActionBtnText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#CBD5E1'
+  },
+  staffDeleteBtn: {
+    backgroundColor: 'rgba(239, 68, 68, 0.1)'
+  },
+  rolePickerRow: {
+    flexDirection: 'row',
+    gap: 8
+  },
+  roleChip: {
+    flex: 1,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: '#1E293B',
+    borderWidth: 1,
+    borderColor: '#334155',
+    alignItems: 'center'
+  },
+  roleChipActive: {
+    backgroundColor: 'rgba(59, 130, 246, 0.2)',
+    borderColor: '#3B82F6'
+  },
+  roleChipText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#94A3B8'
+  },
+  roleChipTextActive: {
+    color: '#60A5FA',
+    fontWeight: '700'
+  },
+
+  // Issued Credentials Receipt
+  credentialsModalContent: {
+    backgroundColor: '#111827',
+    borderRadius: 16,
+    padding: 22,
+    borderWidth: 1,
+    borderColor: '#1F2937'
+  },
+  credentialsTitle: {
+    fontSize: 19,
+    fontWeight: '800',
+    color: '#10B981',
+    textAlign: 'center',
+    marginBottom: 6
+  },
+  credentialsSubtitle: {
+    fontSize: 12,
+    color: '#94A3B8',
+    textAlign: 'center',
+    lineHeight: 17,
+    marginBottom: 16
+  },
+  credentialsBox: {
+    backgroundColor: '#0B0F19',
+    borderRadius: 10,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#1E293B',
+    marginBottom: 14
+  },
+  credRow: {
+    marginBottom: 8
+  },
+  credLabel: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#64748B',
+    letterSpacing: 0.5
+  },
+  credValue: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#F8FAFC',
+    marginTop: 2
+  },
+  credHighlight: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#60A5FA',
+    marginTop: 2
+  },
+  credentialsTipBox: {
+    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(59, 130, 246, 0.3)',
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 16
+  },
+  credentialsTipText: {
+    fontSize: 11,
+    color: '#93C5FD',
+    lineHeight: 16
+  },
+  credentialsDoneBtn: {
+    backgroundColor: '#3B82F6',
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: 'center'
+  },
+  credentialsDoneBtnText: {
+    color: '#FFFFFF',
+    fontSize: 14,
     fontWeight: '700'
   }
 });
