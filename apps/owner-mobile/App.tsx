@@ -1087,27 +1087,33 @@ export default function OwnerMobileApp() {
 
       {/* Multi-Shop Selector Bar (If owner has multiple shops) */}
       {shops.length > 1 && (
-        <ScrollView horizontal style={styles.shopSelectorBar} contentContainerStyle={{ paddingHorizontal: 16, gap: 8 }}>
-          {shops.map((s) => (
-            <TouchableOpacity
-              key={s.id}
-              style={[
-                styles.shopSelectChip,
-                s.id === activeShopId && styles.shopSelectChipActive
-              ]}
-              onPress={() => setActiveShopId(s.id)}
-            >
-              <Text
+        <View style={styles.shopSelectorWrapper}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.shopSelectorContent}
+          >
+            {shops.map((s) => (
+              <TouchableOpacity
+                key={s.id}
                 style={[
-                  styles.shopSelectText,
-                  s.id === activeShopId && styles.shopSelectTextActive
+                  styles.shopSelectChip,
+                  s.id === activeShopId && styles.shopSelectChipActive
                 ]}
+                onPress={() => setActiveShopId(s.id)}
               >
-                💈 {s.name}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
+                <Text
+                  style={[
+                    styles.shopSelectText,
+                    s.id === activeShopId && styles.shopSelectTextActive
+                  ]}
+                >
+                  💈 {s.name}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
       )}
 
       {/* Active Shop Info & Status Bar */}
@@ -2025,16 +2031,22 @@ const styles = StyleSheet.create({
     fontWeight: '600'
   },
 
-  shopSelectorBar: {
+  shopSelectorWrapper: {
     backgroundColor: '#0A0F1D',
     borderBottomWidth: 1,
     borderBottomColor: '#1E293B',
     paddingVertical: 8
   },
+  shopSelectorContent: {
+    paddingHorizontal: 16,
+    gap: 8,
+    flexDirection: 'row',
+    alignItems: 'center'
+  },
   shopSelectChip: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 20,
     backgroundColor: '#111827',
     borderWidth: 1,
     borderColor: '#1F2937'
